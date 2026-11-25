@@ -1,0 +1,64 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+coverage/
+htmlcov/
+dist/
+build/
+
+# Node.js
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Personal documents submitted for processing and generated binaries
+storage/uploads/*
+storage/resumes/*
+storage/generated/*
+storage/temporary/*
+!storage/uploads/.gitkeep
+!storage/resumes/.gitkeep
+!storage/generated/.gitkeep
+!storage/temporary/.gitkeep
+
+# Temporary files
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+
+# Operating system
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Private keys and local databases
+*.pem
+*.key
+*.p12
+*.pfx
+*.sqlite
+*.sqlite3
+*.dump
+
+# Editors
+.idea/
+.qodo/
