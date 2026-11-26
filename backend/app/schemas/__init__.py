@@ -27,6 +27,12 @@ from app.schemas.resume_document import (
     ResumeDocumentResponse,
     ResumeDocumentUpdate,
 )
+from app.schemas.resume_import import (
+    ResumeDocumentDetailResponse,
+    ResumeExtractionResponse,
+    ResumeExtractionSummary,
+    ResumeUploadResponse,
+)
 from app.schemas.skill import SkillCreate, SkillResponse, SkillUpdate
 
 __all__ = [
@@ -55,8 +61,12 @@ __all__ = [
     "ProvenanceResponse",
     "ProvenanceUpdate",
     "ResumeDocumentCreate",
+    "ResumeDocumentDetailResponse",
     "ResumeDocumentResponse",
     "ResumeDocumentUpdate",
+    "ResumeExtractionResponse",
+    "ResumeExtractionSummary",
+    "ResumeUploadResponse",
     "SkillCreate",
     "SkillResponse",
     "SkillUpdate",

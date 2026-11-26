@@ -13,6 +13,7 @@ from app.models.language import Language
 from app.models.preference import JobPreferences
 from app.models.project import Project
 from app.models.resume_document import ResumeDocument
+from app.models.resume_extraction import ResumeExtraction
 from app.models.skill import Skill
 
 __all__ = [
@@ -24,6 +25,7 @@ __all__ = [
     "Language",
     "Project",
     "ResumeDocument",
+    "ResumeExtraction",
     "Skill",
     "WorkExperience",
 ]

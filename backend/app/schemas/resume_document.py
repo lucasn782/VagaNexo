@@ -45,4 +45,5 @@ class ResumeDocumentResponse(APIModel):
     sha256_hash: str
     storage_key: str
     parsing_status: ParsingStatus
+    failure_reason: str | None = None
     uploaded_at: datetime

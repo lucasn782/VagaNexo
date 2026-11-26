@@ -1,7 +1,10 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 class Settings(BaseSettings):
@@ -25,6 +28,17 @@ class Settings(BaseSettings):
     redis_url: str = "redis://127.0.0.1:6379/0"
     celery_broker_url: str = "redis://127.0.0.1:6379/0"
     celery_result_backend: str = "redis://127.0.0.1:6379/1"
+
+    # Private storage for resumes. Paths are relative to STORAGE_ROOT unless
+    # STORAGE_ROOT itself is absolute.
+    storage_root: Path = PROJECT_ROOT / "storage"
+    resume_upload_dir: str = "uploads"
+    resume_extracted_dir: str = "extracted"
+    resume_temp_dir: str = "temporary"
+    max_resume_upload_bytes: int = 10 * 1024 * 1024
+    max_resume_archive_entries: int = 2_000
+    max_resume_uncompressed_bytes: int = 50 * 1024 * 1024
+    max_resume_text_characters: int = 2_000_000
 
     ai_provider: str = "openai-compatible"
     ai_base_url: str = "http://127.0.0.1:11434/v1"
