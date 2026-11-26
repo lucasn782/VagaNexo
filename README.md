@@ -145,11 +145,33 @@ A aplicação fica em `http://127.0.0.1:3000`.
 | Método | Caminho | Descrição |
 | --- | --- | --- |
 | `GET` | `/health` | Retorna `{"status":"healthy","application":"VagaNexo AI"}` |
+| `POST` | `/api/v1/profiles` | Cria o perfil profissional |
+| `GET` | `/api/v1/profiles/{id}` | Consulta o perfil com os registros relacionados |
+| `PATCH` | `/api/v1/profiles/{id}` | Atualiza o perfil profissional |
+| `GET/POST` | `/api/v1/profiles/{id}/educations` | Lista ou cria formações acadêmicas |
+| `PATCH/DELETE` | `/api/v1/profiles/{id}/educations/{item_id}` | Atualiza ou remove uma formação |
+| `GET/POST` | `/api/v1/profiles/{id}/experiences` | Lista ou cria experiências profissionais |
+| `PATCH/DELETE` | `/api/v1/profiles/{id}/experiences/{item_id}` | Atualiza ou remove uma experiência |
+| `GET/POST` | `/api/v1/profiles/{id}/skills` | Lista ou cria competências |
+| `PATCH/DELETE` | `/api/v1/profiles/{id}/skills/{item_id}` | Atualiza ou remove uma competência |
+| `GET/POST` | `/api/v1/profiles/{id}/certifications` | Lista ou cria certificações |
+| `PATCH/DELETE` | `/api/v1/profiles/{id}/certifications/{item_id}` | Atualiza ou remove uma certificação |
+| `GET/POST` | `/api/v1/profiles/{id}/languages` | Lista ou cria idiomas |
+| `PATCH/DELETE` | `/api/v1/profiles/{id}/languages/{item_id}` | Atualiza ou remove um idioma |
+| `GET/POST` | `/api/v1/profiles/{id}/projects` | Lista ou cria projetos |
+| `PATCH/DELETE` | `/api/v1/profiles/{id}/projects/{item_id}` | Atualiza ou remove um projeto |
+| `GET/PUT` | `/api/v1/profiles/{id}/preferences` | Consulta ou cria/atualiza preferências |
+| `GET/POST` | `/api/v1/profiles/{id}/resume-documents` | Lista ou registra metadados de currículos |
+| `GET/PATCH/DELETE` | `/api/v1/profiles/{id}/resume-documents/{document_id}` | Consulta, atualiza ou remove metadados |
+| `POST` | `/api/v1/profiles/{id}/validation/{resource}/{item_id}/confirm` | Confirma um registro importado ou sugerido |
+| `POST` | `/api/v1/profiles/{id}/validation/{resource}/{item_id}/reject` | Rejeita um registro importado ou sugerido |
 | `GET` | `/docs` | Documentação interativa gerada pelo FastAPI |
 | `GET` | `/redoc` | Documentação ReDoc |
 | `GET` | `/openapi.json` | Esquema OpenAPI |
 
-A API fica em `http://127.0.0.1:8000`.
+A API fica em `http://127.0.0.1:8000`. O detalhamento do modelo de dados, das regras de proveniência e dos exemplos está em [`docs/architecture/PROFILE_ENGINE.md`](docs/architecture/PROFILE_ENGINE.md).
+
+O upload de currículos, a extração de conteúdo e a integração com IA ainda não fazem parte desta versão. Os documentos curriculares são registrados apenas como metadados.
 
 ## Qualidade
 

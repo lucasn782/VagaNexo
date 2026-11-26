@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     app_host: str = "127.0.0.1"
     app_port: int = 8000
     log_level: str = "INFO"
+    cors_origins: list[str] = [
+        "http://127.0.0.1:3000",
+        "http://localhost:3000",
+    ]
 
     database_url: str = "postgresql+psycopg://vaganexo:change-me@127.0.0.1:5432/vaganexo"
     redis_url: str = "redis://127.0.0.1:6379/0"
