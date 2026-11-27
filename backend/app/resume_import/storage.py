@@ -6,10 +6,11 @@ name is only kept as metadata and is never used to build a path.
 
 from __future__ import annotations
 
+import hmac
 import os
 import uuid
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 
 from app.core.config import PROJECT_ROOT, Settings, get_settings
@@ -161,22 +162,89 @@ class ResumeStorage:
         return self.relative_key(target)
 
     # ------------------------------------------------------------------
-    # Lookup and deletion
+    # Lookup, ownership and deletion
     # ------------------------------------------------------------------
+    _MEDIA_TYPE_EXTENSIONS: dict[str, str] = {
+        "application/pdf": ".pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    }
+
+    def canonical_upload_key(
+        self,
+        *,
+        profile_id: uuid.UUID,
+        document_id: uuid.UUID,
+        extension: str,
+    ) -> str:
+        if extension not in (".pdf", ".docx"):
+            raise StorageError("unsupported resume file extension")
+        return f"{self.upload_dir}/{profile_id}/{document_id}{extension}"
+
+    def canonical_extracted_key(
+        self,
+        *,
+        profile_id: uuid.UUID,
+        document_id: uuid.UUID,
+    ) -> str:
+        return f"{self.extracted_dir}/{profile_id}/{document_id}.txt"
+
+    def owned_upload_key(
+        self,
+        *,
+        storage_key: str,
+        profile_id: uuid.UUID,
+        document_id: uuid.UUID,
+        media_type: str,
+    ) -> str | None:
+        """Return the canonical upload key only if storage_key proves ownership."""
+        extension = self._MEDIA_TYPE_EXTENSIONS.get(media_type)
+        if extension is None:
+            return None
+        expected = self.canonical_upload_key(
+            profile_id=profile_id,
+            document_id=document_id,
+            extension=extension,
+        )
+        return expected if hmac.compare_digest(storage_key, expected) else None
+
+    def owned_extracted_key(
+        self,
+        *,
+        storage_key: str | None,
+        profile_id: uuid.UUID,
+        document_id: uuid.UUID,
+    ) -> str | None:
+        """Return the canonical extracted key only if storage_key proves ownership."""
+        if not storage_key:
+            return None
+        expected = self.canonical_extracted_key(
+            profile_id=profile_id,
+            document_id=document_id,
+        )
+        return expected if hmac.compare_digest(storage_key, expected) else None
+
     def relative_key(self, path: Path) -> str:
         try:
+            self._ensure_within(self.root, path)
             return path.resolve().relative_to(self.root).as_posix()
         except ValueError as exc:
             raise StorageError() from exc
 
     def resolve(self, storage_key: str) -> Path:
-        candidate = (self.root / storage_key).resolve()
-        if candidate == self.root or not candidate.is_relative_to(self.root):
+        parts = self._validate_relative_key(storage_key)
+        candidate = self._assert_no_symlinks(self.root, parts)
+        resolved = candidate.resolve()
+        if resolved == self.root or not resolved.is_relative_to(self.root) or resolved != candidate:
             raise StorageError()
         return candidate
 
     def delete_key(self, storage_key: str) -> None:
+        parts = self._validate_relative_key(storage_key)
+        if parts[0] not in (self.upload_dir, self.extracted_dir) or len(parts) != 3:
+            raise StorageError("deletion is only permitted for managed resume files")
         path = self.resolve(storage_key)
+        if path.exists() and path.is_dir():
+            raise StorageError("cannot delete a storage directory")
         try:
             path.unlink(missing_ok=True)
             self._remove_empty_directory(path.parent)
@@ -193,12 +261,48 @@ class ResumeStorage:
     # Internal helpers
     # ------------------------------------------------------------------
     @staticmethod
-    def _ensure_within(root: Path, path: Path) -> None:
-        if not path.resolve().is_relative_to(root.resolve()):
+    def _validate_relative_key(storage_key: str) -> tuple[str, ...]:
+        if not isinstance(storage_key, str) or not storage_key:
+            raise StorageError("storage key must not be empty")
+        if storage_key.strip() != storage_key:
+            raise StorageError("storage key must not contain surrounding whitespace")
+        if "\x00" in storage_key or "\\" in storage_key or ":" in storage_key:
+            raise StorageError("storage key contains forbidden characters")
+        if storage_key.startswith("/") or storage_key.endswith("/"):
+            raise StorageError("storage key must be a relative path")
+        if PurePosixPath(storage_key).is_absolute() or Path(storage_key).is_absolute():
+            raise StorageError("storage key must be relative")
+        parts = storage_key.split("/")
+        if any(part in ("", ".", "..") for part in parts):
+            raise StorageError("storage key contains invalid path segments")
+        return tuple(parts)
+
+    @staticmethod
+    def _assert_no_symlinks(base: Path, parts: tuple[str, ...]) -> Path:
+        current = base
+        for part in parts:
+            current = current / part
+            if current.is_symlink():
+                raise StorageError("symbolic links are not permitted in storage")
+        return current
+
+    @classmethod
+    def _ensure_within(cls, root: Path, path: Path) -> None:
+        resolved_root = root.resolve()
+        if path.is_symlink():
+            raise StorageError("symbolic links are not permitted in storage")
+        if path.is_relative_to(resolved_root):
+            rel_parts = path.relative_to(resolved_root).parts
+            if rel_parts:
+                cls._assert_no_symlinks(resolved_root, rel_parts)
+        resolved = path.resolve()
+        if resolved == resolved_root or not resolved.is_relative_to(resolved_root):
             raise StorageError()
 
     def _remove_empty_directory(self, directory: Path) -> None:
-        if directory == self.root or not directory.is_relative_to(self.root):
+        if directory.is_symlink():
+            return
+        if directory.parent not in (self.upload_root, self.extracted_root):
             return
         try:
             directory.rmdir()

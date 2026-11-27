@@ -3,7 +3,7 @@
 ## Resumo
 
 - **Objetivo**: implementar o módulo **Resume Importer v1.0** para importação, validação binária, deduplicação por SHA-256, armazenamento privado e extração/normalização de currículos em PDF e DOCX, além de corrigir definitivamente a infraestrutura de testes com Alembic no banco `vaganexo_test`.
-- **Data e horário**: 26/11/2026, 16:53 −03:00.
+- **Data e horário**: 26/11/2026, 22:52 −03:00.
 - **Branch**: `feat/resume-import`.
 - **Commit-base**: `f4d3fff` (`Merge pull request #1 from lucasn782/feat/profile-engine`, contendo `6584f0a`).
 
@@ -106,12 +106,15 @@ Prefixo: `/api/v1/profiles/{profile_id}/resume-documents`
 | Frontend | APROVADO |
 
 Detalhes das execuções:
-- `uv run pytest -v --cov=app --cov-report=term-missing`: **90 passed** em duas execuções consecutivas (`4.41s` e `4.87s`), cobertura total de **92%** em `app`.
+- `uv run pytest -v --cov=app --cov-report=term-missing`: **95 passed** (`6.36s`), cobertura total de **92%** em `app`, sem avisos de depreciação do Alembic após `path_separator = os` em `backend/alembic.ini`.
 - `uv run ruff check .`: `All checks passed!`.
-- `uv run ruff format --check .`: `78 files already formatted`.
+- `uv run ruff format --check .`: `79 files already formatted`.
 - `uv run mypy app`: `Success: no issues found in 62 source files`.
-- Teste ao vivo com `uvicorn app.main:app --host 127.0.0.1 --port 8000` contra `vaganexo_test`: `LIVE_API_OK` (`/health`, `/docs`, `/openapi.json`, upload PDF/DOCX, listagem, extração e exclusão).
-- Frontend: `npm run lint`, `npx tsc --noEmit` e `npm run build` aprovados (código 0).
+- Teste de downgrade e re-upgrade Alembic (`backend/tests/integration/test_migration_downgrade.py` em banco descartável `vaganexo_migration_test`): **APROVADO**.
+- Testes de integração entre perfis (`test_resume_import_api.py`): **APROVADO**.
+- Testes de segurança do armazenamento (`test_resume_import_service.py`): **APROVADO**.
+- Teste ao vivo com `uvicorn app.main:app --host 127.0.0.1 --port 8019` contra `vaganexo_test`: **LIVE_API_HARDENING_OK** (upload PDF/DOCX, deduplicação `409`, listagem, detalhes, extração, isolamento `404`, proteção contra exclusão cruzada via registro manual e exclusão legítima `204`).
+- Frontend: `npm run lint`, `npx tsc --noEmit` e `npm run build` aprovados (código 0, executados antes da etapa final de documentação sem alterações no frontend).
 
 ### Correção da infraestrutura de testes
 
@@ -130,6 +133,41 @@ Detalhes das execuções:
 - **Tipagem do `pymupdf.Document` no Mypy**: `for page in document` falhou no `mypy`; substituído por `document.load_page(index)` com `range(document.page_count)`.
 - **Inconsistência `drop_all`/`create_all` no `vaganexo_test`**: corrigida definitivamente com Alembic em `conftest.py` e `alembic/env.py`.
 
+## Endurecimento de segurança e integridade (Revisão PR #2)
+
+### 1. Problemas identificados e causa raiz
+
+1. **Exclusão cruzada via registro manual de metadados**: `POST /api/v1/profiles/{profile_id}/resume-documents` aceita `storage_key` fornecido pelo cliente. `ResumeImportService.delete_document()` repassava `document.storage_key` e `extraction.extracted_storage_key` diretamente para `ResumeStorage.delete_key()`, sem verificar se pertenciam ao par `(profile_id, document_id)` e ao tipo do documento.
+2. **Proteção contra symlinks e caminhos manipulados em `ResumeStorage`**: `resolve()` chamava `.resolve()` antes de verificar links simbólicos intermediários, permitindo que um symlink interno apontasse para outro arquivo dentro do próprio diretório de armazenamento; além disso, faltava rejeição explícita de separadores Windows (`\`), letras de unidade (`:`), bytes nulos e componentes vazios (`//`).
+3. **Falha no `downgrade()` da migração `c8d9e0f1a2b3`**: `downgrade()` recriava a constraint legada `parsing_status IN ('pending', 'processing', 'parsed', 'failed')` e reduzia a coluna para `VARCHAR(16)` sem converter antes os estados `completed` e `completed_with_warnings`.
+4. **Ausência de autenticação e autorização multiusuário**: os módulos Profile Engine e Resume Importer ainda não possuem camada de identidade/autenticação.
+
+### 2. Alterações realizadas e arquivos modificados
+
+- `backend/app/resume_import/storage.py`:
+  - Adicionadas regras canônicas `canonical_upload_key()`, `canonical_extracted_key()`, `owned_upload_key()` e `owned_extracted_key()` (comparação com `hmac.compare_digest`).
+  - `resolve()`, `relative_key()`, `delete_key()` e `_ensure_within()` agora validam estritamente caminhos relativos POSIX (`_validate_relative_key`), rejeitam separadores `\`, `:`, bytes nulos e segmentos vazios/`.`/`..`, proíbem exclusão de diretórios ou fora de `uploads/` e `extracted/`, e percorrem cada componente verificando `is_symlink()` (`_assert_no_symlinks`) antes de qualquer operação física.
+- `backend/app/resume_import/service.py`:
+  - `delete_document()` agora só remove arquivos físicos cujo `storage_key` e `extracted_storage_key` correspondam exatamente aos caminhos canônicos gerados pelos UUIDs confiáveis do servidor (`uploads/{profile_id}/{document_id}.{pdf|docx}` e `extracted/{profile_id}/{document_id}.txt`).
+  - Registros manuais com chaves não canônicas continuam sendo removidos do PostgreSQL quando válidos, mas não disparam exclusão física e registram aviso em log sem expor caminhos absolutos.
+- `backend/app/profile/validators.py`:
+  - `validate_storage_key()` endurecido contra separadores Windows, bytes nulos, letras de unidade, barras finais/duplicadas e segmentos `.`/`..`.
+- `backend/alembic/versions/c8d9e0f1a2b3_add_resume_importer_tables.py`:
+  - `downgrade()` ajustado para: (1) remover a constraint atual de `parsing_status`, (2) converter `completed` e `completed_with_warnings` para `parsed` (conversão intencional com perda de granularidade preservando os registros), (3) recriar a constraint legada, (4) reduzir a coluna para `VARCHAR(16)`, e (5) remover `ix_resume_extractions_resume_document_id`, `resume_extractions` (**com perda esperada dos dados de extração durante a reversão**) e `failure_reason`.
+- `backend/alembic.ini`: adicionado `path_separator = os` na seção `[alembic]`, eliminando os 5 avisos de depreciação do Alembic.
+- `backend/tests/unit/test_resume_import_service.py`: adicionados testes de travessia de caminho, separadores Windows, proteção contra symlinks (com fallback determinístico quando o SO restringe criação de symlinks), exclusão cruzada (upload e extração), compatibilidade de registros manuais e exclusão legítima.
+- `backend/tests/integration/test_resume_import_api.py`: adicionado teste de integração rejeitando travessia no cadastro manual (`422`) e comprovando preservação dos arquivos do perfil B após exclusão de registro manual no perfil A.
+- `backend/tests/integration/test_migration_downgrade.py`: teste isolado em banco descartável `vaganexo_migration_test` validando `upgrade head`, inserção de todos os 6 estados, `downgrade` para `bdd3fb3a0174` (conversão de `completed` e `completed_with_warnings` para `parsed`, preservação dos demais registros e perda esperada de `resume_extractions`) e re-`upgrade` até `head`.
+- `docs/architecture/PROFILE_ENGINE.md` e `docs/architecture/RESUME_IMPORTER.md`: adicionada a seção **Segurança, autenticação e limites de implantação**.
+
+## Segurança, autenticação e limites de implantação
+
+- **Ausência de autenticação e autorização multiusuário**: o Profile Engine e o Resume Importer ainda não implementam autenticação nem controle de acesso por usuário. Conhecer o UUID de um perfil permite acessar e operar suas rotas.
+- **Endpoints com dados pessoais**: rotas sob `/api/v1/profiles` e `/api/v1/profiles/{profile_id}/resume-documents` (incluindo `GET /{document_id}/extraction`, que retorna o texto integral do currículo) manipulam dados pessoais sensíveis.
+- **Exposição proibida e bloqueio de produção**: os endpoints de perfil e currículo **não devem ser expostos diretamente à internet**, e a implantação pública ou SaaS está **bloqueada** até a implementação formal de identidade, autenticação e autorização baseada em propriedade.
+- **Armazenamento privado vs. controle de acesso**: manter os arquivos fora de `frontend/` e sem rota estática pública impede acesso direto por URL de arquivo, mas não substitui autenticação na API.
+- **Próximos passos**: implementar autenticação/autorização multiusuário antes de qualquer exposição pública, além dos módulos futuros (OCR, AI Profile Analyzer e CV Engine).
+
 ## Conclusão
 
-O **Resume Importer v1.0** e a **correção da infraestrutura de testes com Alembic** foram **concluídos** com sucesso na branch `feat/resume-import`, atendendo a todos os critérios funcionais, de segurança, migração e qualidade.
+O **Resume Importer v1.0**, a **correção da infraestrutura de testes com Alembic** e as **correções de segurança e reversão de migração da revisão do PR #2** foram **concluídos** na branch `feat/resume-import`. O sistema permanece bloqueado para implantação pública até a implementação de autenticação e autorização multiusuário.

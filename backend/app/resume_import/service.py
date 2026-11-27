@@ -201,10 +201,35 @@ class ResumeImportService:
         self.profiles.get_profile(profile_id)
         document = self.profiles.get_resume_document(profile_id, document_id)
 
-        keys = [document.storage_key]
+        keys_to_delete: list[str] = []
+        owned_upload = self.storage.owned_upload_key(
+            storage_key=document.storage_key,
+            profile_id=profile_id,
+            document_id=document.id,
+            media_type=document.media_type,
+        )
+        if owned_upload is not None:
+            keys_to_delete.append(owned_upload)
+        else:
+            logger.warning(
+                "skipping physical deletion for non-canonical upload key on document %s",
+                document.id,
+            )
+
         extraction = document.extraction
         if extraction is not None and extraction.extracted_storage_key:
-            keys.append(extraction.extracted_storage_key)
+            owned_extracted = self.storage.owned_extracted_key(
+                storage_key=extraction.extracted_storage_key,
+                profile_id=profile_id,
+                document_id=document.id,
+            )
+            if owned_extracted is not None:
+                keys_to_delete.append(owned_extracted)
+            else:
+                logger.warning(
+                    "skipping physical deletion for non-canonical extracted key on document %s",
+                    document.id,
+                )
 
         self.session.delete(document)
         try:
@@ -213,7 +238,7 @@ class ResumeImportService:
             self.session.rollback()
             raise StorageError("resume document could not be deleted") from exc
 
-        for key in keys:
+        for key in keys_to_delete:
             self._safe_delete(key)
 
     # ------------------------------------------------------------------

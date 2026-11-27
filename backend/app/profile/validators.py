@@ -94,5 +94,16 @@ def resolve_validation_status(
 
 
 def validate_storage_key(storage_key: str) -> None:
-    if ".." in storage_key or storage_key.startswith(("/", "\\")):
+    if (
+        not storage_key
+        or storage_key.strip() != storage_key
+        or "\x00" in storage_key
+        or "\\" in storage_key
+        or ":" in storage_key
+        or storage_key.startswith("/")
+        or storage_key.endswith("/")
+    ):
+        raise InvalidProfileDataError("storage_key must be a relative path without traversal")
+    parts = storage_key.split("/")
+    if any(part in ("", ".", "..") for part in parts):
         raise InvalidProfileDataError("storage_key must be a relative path without traversal")

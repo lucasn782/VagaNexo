@@ -560,3 +560,12 @@ $env:TEST_DATABASE_URL = "postgresql+psycopg://usuario:senha@127.0.0.1:5433/vaga
 - Sem IA: nenhuma sugestão é gerada; o modelo apenas suporta a proveniência e a confirmação.
 - Sem exclusão de perfil via API: a integridade de exclusão já é garantida no banco e testada.
 - CORS configurado por `CORS_ORIGINS`, com padrão para o frontend local em `http://127.0.0.1:3000` e `http://localhost:3000`.
+
+## 14. Segurança, autenticação e limites de implantação
+
+- **Ausência de autenticação e autorização multiusuário**: o sistema ainda não possui autenticação nem controle de acesso por usuário. Qualquer chamada HTTP que conheça o `profile_id` (UUID) consegue consultar, alterar ou excluir recursos associados àquele perfil.
+- **Endpoints com dados pessoais**: as rotas sob `/api/v1/profiles` e `/api/v1/profiles/{profile_id}/resume-documents` expõem dados pessoais do candidato (nome, e-mail, telefone, histórico profissional, currículo e texto extraído).
+- **Restrição de exposição**: os endpoints de perfil e currículo **não devem ser expostos diretamente à internet**.
+- **Bloqueio de implantação pública/SaaS**: a implantação pública ou SaaS está **bloqueada** até a implementação formal de identidade, autenticação e autorização com verificação de propriedade do perfil.
+- **Armazenamento físico vs. controle de acesso**: o armazenamento privado em disco fora do frontend não substitui controle de acesso na API.
+- **Dados pessoais**: o texto extraído e os dados cadastrais dos currículos constituem dado pessoal e exigem proteção compatível antes de uso em produção.

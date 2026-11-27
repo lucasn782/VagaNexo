@@ -232,3 +232,72 @@ def test_deleting_resume_preserves_provenance_on_profile_facts(
     preserved = next(item for item in skills if item["id"] == skill_id)
     assert preserved["source_document_id"] is None
     assert preserved["source_type"] == "document"
+
+
+def test_manual_metadata_cannot_delete_other_profile_files_and_rejects_traversal(
+    client: TestClient,
+    profile_payload: dict[str, object],
+    isolated_storage: ResumeStorage,
+) -> None:
+    profile_a = _create_profile(client, profile_payload)
+    profile_b = _create_profile(client, {**profile_payload, "full_name": "Bruno Lima"})
+
+    upload_b = client.post(
+        f"/api/v1/profiles/{profile_b}/resume-documents/upload",
+        files={"file": ("bruno.pdf", _pdf_bytes("Bruno CV"), "application/pdf")},
+    )
+    assert upload_b.status_code == 201
+    doc_b_id = upload_b.json()["id"]
+
+    listed_b = client.get(f"/api/v1/profiles/{profile_b}/resume-documents").json()
+    b_storage_key = listed_b[0]["storage_key"]
+    assert isolated_storage.exists(b_storage_key)
+
+    # Path traversal and manipulated paths must be rejected on manual creation
+    for bad_key in (
+        "../outside.pdf",
+        "../../other-profile/file.pdf",
+        "/absolute/path/file.pdf",
+        r"uploads\file.pdf",
+        "uploads//file.pdf",
+    ):
+        resp = client.post(
+            f"/api/v1/profiles/{profile_a}/resume-documents",
+            json={
+                "original_filename": "evil.pdf",
+                "media_type": "application/pdf",
+                "file_size": 100,
+                "sha256_hash": "a" * 64,
+                "storage_key": bad_key,
+            },
+        )
+        assert resp.status_code == 422
+
+    # Manual metadata pointing to an extracted file of profile B
+    b_extracted_key = f"extracted/{profile_b}/{doc_b_id}.txt"
+    assert isolated_storage.exists(b_extracted_key)
+
+    manual_a = client.post(
+        f"/api/v1/profiles/{profile_a}/resume-documents",
+        json={
+            "original_filename": "manual.pdf",
+            "media_type": "application/pdf",
+            "file_size": 100,
+            "sha256_hash": "c" * 64,
+            "storage_key": b_extracted_key,
+        },
+    )
+    assert manual_a.status_code == 201
+    manual_a_id = manual_a.json()["id"]
+
+    # Deleting manual_a removes its DB record but MUST NOT touch profile B's file
+    delete_a = client.delete(f"/api/v1/profiles/{profile_a}/resume-documents/{manual_a_id}")
+    assert delete_a.status_code == 204
+    assert isolated_storage.exists(b_extracted_key)
+    assert isolated_storage.exists(b_storage_key)
+    assert (
+        client.get(
+            f"/api/v1/profiles/{profile_b}/resume-documents/{doc_b_id}/extraction"
+        ).status_code
+        == 200
+    )

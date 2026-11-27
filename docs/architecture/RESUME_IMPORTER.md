@@ -138,10 +138,31 @@ Prefixo: `/api/v1/profiles/{profile_id}/resume-documents`
 ## 14. Segurança
 
 - Validação binária independente da extensão e MIME informados pelo cliente.
-- Nomes físicos baseados em UUID; prevenção de path traversal em uploads, storage keys e entradas ZIP.
+- Nomes físicos baseados em UUID; prevenção de path traversal, separadores Windows, bytes nulos, letras de unidade e componentes duplicados em uploads, `storage_key`, `ResumeStorage` e entradas ZIP.
+- Proteção explícita contra symlinks: `ResumeStorage.resolve()`, `relative_key()`, `delete_key()` e `_ensure_within()` verificam cada componente do caminho e rejeitam links simbólicos antes de qualquer operação física.
+- Propriedade estrita na exclusão: `ResumeImportService.delete_document()` só remove arquivos físicos cujo `storage_key` e `extracted_storage_key` correspondam exatamente aos caminhos canônicos derivados dos UUIDs confiáveis do servidor (`uploads/{profile_id}/{document_id}.{pdf|docx}` e `extracted/{profile_id}/{document_id}.txt`). Registros manuais de metadados com chaves não canônicas são removidos do banco sem tocar em arquivos físicos.
 - Proteção contra ZIP bombs (contagem de entradas e tamanho descompactado).
 - Isolamento estrito por `profile_id` em todas as consultas, extrações e exclusões.
-- Nenhum conteúdo de currículo, dado pessoal ou caminho absoluto é registrado em logs ou exposto em erros.
+- Nenhum conteúdo de currículo, dado pessoal ou caminho absoluto é registrado em logs ou exposto em erros ou respostas da API.
+- Os arquivos armazenados em `storage/` permanecem fora do diretório público e fora de `frontend/`, sem rota estática pública para servi-los.
+
+## 15. Segurança, autenticação e limites de implantação
+
+- **Ausência de autenticação e autorização multiusuário**: o Profile Engine e o Resume Importer ainda não possuem autenticação nem autorização de usuários. Conhecer o UUID de um perfil é suficiente para operar suas rotas na API.
+- **Endpoints com dados pessoais**: todos os endpoints sob `/api/v1/profiles/{profile_id}/resume-documents` (em especial `GET /{document_id}/extraction`, que retorna o texto integral do currículo) manipulam dados pessoais sensíveis.
+- **Exposição proibida na internet**: os endpoints de perfil e currículo **não devem ser expostos diretamente à internet**.
+- **Bloqueio de implantação pública/SaaS**: a implantação pública ou em modo SaaS está **bloqueada** até a implementação completa de autenticação e controle de acesso baseado em propriedade do perfil.
+- **Armazenamento privado não equivale a controle de acesso na API**: manter arquivos fora do frontend protege contra acesso estático direto, mas não substitui autenticação nas rotas REST.
+- **Texto extraído como dado pessoal**: o texto extraído dos currículos é dado pessoal e deve receber criptografia, controle de acesso e governança adequados antes de qualquer ambiente de produção.
+
+## 16. Migração e reversão (Alembic)
+
+- A migração `c8d9e0f1a2b3` adiciona `failure_reason` e amplia `parsing_status` para `VARCHAR(32)` com `completed` e `completed_with_warnings`, além de criar `resume_extractions`.
+- Durante o `downgrade()` para `bdd3fb3a0174`:
+  1. A constraint atual de `parsing_status` é removida.
+  2. Os estados `completed` e `completed_with_warnings` são convertidos para `parsed` (conversão intencional com perda de granularidade, preservando os registros em `resume_documents`).
+  3. A constraint legada é recriada e `parsing_status` retorna para `VARCHAR(16)`.
+  4. `resume_extractions` e `failure_reason` são removidos (**consequência esperada**: os dados armazenados em `resume_extractions` são perdidos na reversão).
 
 ## 15. Instruções de testes
 

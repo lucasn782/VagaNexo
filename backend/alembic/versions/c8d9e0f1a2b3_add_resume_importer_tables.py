@@ -108,13 +108,15 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_resume_extractions_resume_document_id", table_name="resume_extractions")
-    op.drop_table("resume_extractions")
-
     op.drop_constraint(
         op.f("ck_resume_documents_parsing_status"),
         "resume_documents",
         type_="check",
+    )
+    op.execute(
+        "UPDATE resume_documents "
+        "SET parsing_status = 'parsed' "
+        "WHERE parsing_status IN ('completed', 'completed_with_warnings')"
     )
     op.create_check_constraint(
         op.f("ck_resume_documents_parsing_status"),
@@ -129,4 +131,7 @@ def downgrade() -> None:
         existing_nullable=False,
         existing_server_default=sa.text("'pending'::character varying"),
     )
+
+    op.drop_index("ix_resume_extractions_resume_document_id", table_name="resume_extractions")
+    op.drop_table("resume_extractions")
     op.drop_column("resume_documents", "failure_reason")
