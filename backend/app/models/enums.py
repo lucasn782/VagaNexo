@@ -80,9 +80,17 @@ class ProjectType(StrEnum):
 
 
 class ParsingStatus(StrEnum):
+    """Lifecycle of a resume document inside the importer.
+
+    ``parsed`` is kept for documents registered before the importer existed;
+    new imports use ``completed`` or ``completed_with_warnings``.
+    """
+
     PENDING = "pending"
     PROCESSING = "processing"
     PARSED = "parsed"
+    COMPLETED = "completed"
+    COMPLETED_WITH_WARNINGS = "completed_with_warnings"
     FAILED = "failed"
 
 

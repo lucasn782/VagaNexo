@@ -22,6 +22,7 @@ from app.models.mixins import UUIDPrimaryKeyMixin
 
 if TYPE_CHECKING:
     from app.models.candidate_profile import CandidateProfile
+    from app.models.resume_extraction import ResumeExtraction
 
 
 class ResumeDocument(UUIDPrimaryKeyMixin, Base):
@@ -58,11 +59,12 @@ class ResumeDocument(UUIDPrimaryKeyMixin, Base):
     sha256_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     storage_key: Mapped[str] = mapped_column(String(500), nullable=False)
     parsing_status: Mapped[ParsingStatus] = mapped_column(
-        sa_enum(ParsingStatus, "parsing_status", length=16),
+        sa_enum(ParsingStatus, "parsing_status", length=32),
         nullable=False,
         default=ParsingStatus.PENDING,
         server_default=ParsingStatus.PENDING.value,
     )
+    failure_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -70,3 +72,9 @@ class ResumeDocument(UUIDPrimaryKeyMixin, Base):
     )
 
     candidate_profile: Mapped[CandidateProfile] = relationship(back_populates="resume_documents")
+    extraction: Mapped[ResumeExtraction | None] = relationship(
+        back_populates="resume_document",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        uselist=False,
+    )

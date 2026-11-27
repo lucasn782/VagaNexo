@@ -22,7 +22,6 @@ from app.models.experience import WorkExperience
 from app.models.language import Language
 from app.models.preference import JobPreferences
 from app.models.project import Project
-from app.models.resume_document import ResumeDocument
 from app.models.skill import Skill
 from app.profile.service import ProfileService
 from app.schemas.certification import (
@@ -41,11 +40,6 @@ from app.schemas.profile import (
     CandidateProfileUpdate,
 )
 from app.schemas.project import ProjectCreate, ProjectResponse, ProjectUpdate
-from app.schemas.resume_document import (
-    ResumeDocumentCreate,
-    ResumeDocumentResponse,
-    ResumeDocumentUpdate,
-)
 from app.schemas.skill import SkillCreate, SkillResponse, SkillUpdate
 
 SessionDep = Annotated[Session, Depends(get_db)]
@@ -457,77 +451,6 @@ def upsert_preferences(
     service: ServiceDep,
 ) -> JobPreferences:
     return service.upsert_preferences(profile_id, payload)
-
-
-# ---------------------------------------------------------------------------
-# Resume documents (metadata only, no upload in this phase)
-# ---------------------------------------------------------------------------
-@router.get(
-    "/{profile_id}/resume-documents",
-    response_model=list[ResumeDocumentResponse],
-    summary="List resume document metadata",
-)
-def list_resume_documents(
-    profile_id: uuid.UUID,
-    service: ServiceDep,
-) -> list[ResumeDocument]:
-    return service.list_resume_documents(profile_id)
-
-
-@router.post(
-    "/{profile_id}/resume-documents",
-    response_model=ResumeDocumentResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Register resume document metadata",
-)
-def create_resume_document(
-    profile_id: uuid.UUID,
-    payload: ResumeDocumentCreate,
-    service: ServiceDep,
-) -> ResumeDocument:
-    return service.create_resume_document(profile_id, payload)
-
-
-@router.get(
-    "/{profile_id}/resume-documents/{document_id}",
-    response_model=ResumeDocumentResponse,
-    summary="Get resume document metadata",
-)
-def read_resume_document(
-    profile_id: uuid.UUID,
-    document_id: uuid.UUID,
-    service: ServiceDep,
-) -> ResumeDocument:
-    return service.get_resume_document(profile_id, document_id)
-
-
-@router.patch(
-    "/{profile_id}/resume-documents/{document_id}",
-    response_model=ResumeDocumentResponse,
-    summary="Update resume document metadata",
-)
-def update_resume_document(
-    profile_id: uuid.UUID,
-    document_id: uuid.UUID,
-    payload: ResumeDocumentUpdate,
-    service: ServiceDep,
-) -> ResumeDocument:
-    return service.update_resume_document(profile_id, document_id, payload)
-
-
-@router.delete(
-    "/{profile_id}/resume-documents/{document_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    response_class=Response,
-    summary="Delete resume document metadata (the stored file is not touched)",
-)
-def delete_resume_document(
-    profile_id: uuid.UUID,
-    document_id: uuid.UUID,
-    service: ServiceDep,
-) -> Response:
-    service.delete_resume_document(profile_id, document_id)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # ---------------------------------------------------------------------------

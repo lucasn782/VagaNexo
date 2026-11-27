@@ -31,10 +31,12 @@ out/
 storage/uploads/*
 storage/resumes/*
 storage/generated/*
+storage/extracted/*
 storage/temporary/*
 !storage/uploads/.gitkeep
 !storage/resumes/.gitkeep
 !storage/generated/.gitkeep
+!storage/extracted/.gitkeep
 !storage/temporary/.gitkeep
 
 # Temporary files

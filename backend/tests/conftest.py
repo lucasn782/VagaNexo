@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from pathlib import Path
 
 import psycopg
 import pytest
+from alembic import command
+from alembic.config import Config
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, create_engine, text
+from sqlalchemy import Engine, create_engine, inspect, text
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -14,11 +17,11 @@ import app.models  # noqa: F401  (registers every table on Base.metadata)
 from app.core.config import get_settings
 from app.database.dependencies import get_db
 from app.main import app
-from app.models.base import Base
 
 TEST_DATABASE_NAME = "vaganexo_test"
 
 PROFILE_TABLES = (
+    "resume_extractions",
     "resume_documents",
     "job_preferences",
     "projects",
@@ -56,22 +59,38 @@ def _ensure_database(url: URL) -> None:
             connection.execute(f'CREATE DATABASE "{url.database}"')
 
 
+def _run_test_migrations(engine: Engine) -> None:
+    if not engine.url.database or not engine.url.database.endswith("_test"):
+        raise RuntimeError("refusing to run migrations against a non-test database")
+    alembic_ini = Path(__file__).resolve().parents[1] / "alembic.ini"
+    config = Config(str(alembic_ini))
+    with engine.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "head")
+
+
 @pytest.fixture(scope="session")
 def test_engine() -> Iterator[Engine]:
     url = _test_database_url()
     _ensure_database(url)
     engine = create_engine(url, pool_pre_ping=True)
-    Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
+    _run_test_migrations(engine)
     try:
         yield engine
     finally:
-        Base.metadata.drop_all(engine)
         engine.dispose()
 
 
 @pytest.fixture()
 def db_session(test_engine: Engine) -> Iterator[Session]:
+    if not test_engine.url.database or not test_engine.url.database.endswith("_test"):
+        raise RuntimeError("refusing to truncate tables in a non-test database")
+    existing_tables = set(inspect(test_engine).get_table_names(schema="public"))
+    missing_tables = set(PROFILE_TABLES) - existing_tables
+    if missing_tables:
+        raise RuntimeError(
+            f"test database is missing expected tables: {', '.join(sorted(missing_tables))}"
+        )
     with test_engine.begin() as connection:
         connection.execute(text(f"TRUNCATE TABLE {', '.join(PROFILE_TABLES)} CASCADE"))
     factory = sessionmaker(
