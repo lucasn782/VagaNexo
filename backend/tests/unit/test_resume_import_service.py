@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import subprocess
 import uuid
 from pathlib import Path
 
@@ -342,3 +343,230 @@ def test_delete_manual_record_cannot_delete_other_profile_upload_or_extraction(
     service.delete_document(profile_a.id, forged_upload_doc.id)
     assert db_session.get(ResumeDocument, forged_upload_doc.id) is None
     assert arbitrary_file.exists()
+
+
+def _try_symlink(link: Path, target: Path, *, is_dir: bool) -> bool:
+    try:
+        os.symlink(target, link, target_is_directory=is_dir)
+        return True
+    except (OSError, NotImplementedError):
+        return False
+
+
+def _try_windows_junction(link: Path, target: Path) -> bool:
+    if os.name != "nt":
+        return False
+    proc = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return proc.returncode == 0 and link.exists()
+
+
+@pytest.mark.parametrize("dir_name", ["uploads", "extracted", "temporary"])
+def test_storage_rejects_symlink_and_broken_symlink_in_main_directories(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dir_name: str,
+) -> None:
+    storage_root = tmp_path / "storage"
+    storage_root.mkdir()
+    external_dir = tmp_path / "external_target"
+    external_dir.mkdir()
+    sentinel = external_dir / "keep.txt"
+    sentinel.write_text("do-not-touch", encoding="utf-8")
+
+    link_path = storage_root / dir_name
+    if not _try_symlink(link_path, external_dir, is_dir=True):
+        link_path.mkdir()
+        monkeypatch.setattr(
+            Path,
+            "is_symlink",
+            lambda self: self == link_path,
+        )
+
+    storage = ResumeStorage(storage_root)
+    with pytest.raises(StorageError):
+        storage.ensure_ready()
+
+    if dir_name == "temporary":
+        with pytest.raises(StorageError):
+            storage.stage(io.BytesIO(b"%PDF-1.4 test"), max_bytes=1024)
+    elif dir_name == "extracted":
+        with pytest.raises(StorageError):
+            storage.write_extracted_text(
+                profile_id=uuid.uuid4(),
+                document_id=uuid.uuid4(),
+                text="hello",
+            )
+    else:
+        # uploads as symlink: commit must fail and leave external_dir untouched
+        # Create valid temporary and extracted dirs if not monkeypatched
+        with pytest.raises(StorageError):
+            storage.commit(
+                staged=type(
+                    "DummyStaged",
+                    (),
+                    {"path": storage.temp_root / "fake.part"},
+                )(),
+                profile_id=uuid.uuid4(),
+                document_id=uuid.uuid4(),
+                extension=".pdf",
+            )
+
+    assert [p.name for p in external_dir.iterdir()] == ["keep.txt"]
+    assert sentinel.read_text(encoding="utf-8") == "do-not-touch"
+
+    # Broken symlink check (Teste F)
+    broken_storage_root = tmp_path / f"broken_{dir_name}"
+    broken_storage_root.mkdir()
+    broken_link = broken_storage_root / dir_name
+    missing_target = tmp_path / "does_not_exist"
+    if not _try_symlink(broken_link, missing_target, is_dir=True):
+        broken_link.mkdir()
+        monkeypatch.setattr(
+            Path,
+            "is_symlink",
+            lambda self: self == broken_link,
+        )
+    broken_storage = ResumeStorage(broken_storage_root)
+    with pytest.raises(StorageError):
+        broken_storage.ensure_ready()
+
+
+@pytest.mark.parametrize("dir_name", ["uploads", "extracted", "temporary"])
+def test_storage_rejects_windows_junctions_in_main_directories(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dir_name: str,
+) -> None:
+    storage_root = tmp_path / "j_storage"
+    storage_root.mkdir()
+    external_dir = tmp_path / "j_external"
+    external_dir.mkdir()
+    link_path = storage_root / dir_name
+
+    if not _try_windows_junction(link_path, external_dir):
+        link_path.mkdir()
+        monkeypatch.setattr(
+            "app.resume_import.storage._is_link_or_reparse_point",
+            lambda p: p == link_path,
+        )
+
+    storage = ResumeStorage(storage_root)
+    with pytest.raises(StorageError):
+        storage.ensure_ready()
+    assert list(external_dir.iterdir()) == []
+
+
+def test_storage_rejects_symlink_in_root_profile_dir_and_regular_file_dirs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    external_dir = tmp_path / "ext"
+    external_dir.mkdir()
+
+    # Root itself as symlink/junction
+    root_link = tmp_path / "root_link"
+    if not _try_windows_junction(root_link, external_dir) and not _try_symlink(
+        root_link, external_dir, is_dir=True
+    ):
+        root_link.mkdir()
+        monkeypatch.setattr(
+            "app.resume_import.storage._is_link_or_reparse_point",
+            lambda p: p == root_link,
+        )
+    with pytest.raises(StorageError):
+        ResumeStorage(root_link)
+
+    # Regular file occupying uploads/
+    monkeypatch.undo()
+    file_root = tmp_path / "file_root"
+    file_root.mkdir()
+    (file_root / "uploads").write_text("not a dir", encoding="utf-8")
+    with pytest.raises(StorageError):
+        ResumeStorage(file_root).ensure_ready()
+
+    # Profile subdirectory as junction/symlink inside uploads/{profile_id}
+    clean_root = tmp_path / "clean_root"
+    storage = ResumeStorage(clean_root)
+    storage.ensure_ready()
+    profile_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+    staged = storage.stage(io.BytesIO(b"%PDF-1.4 payload"), max_bytes=1024)
+
+    profile_dir = storage.upload_root / str(profile_id)
+    if not _try_windows_junction(profile_dir, external_dir) and not _try_symlink(
+        profile_dir, external_dir, is_dir=True
+    ):
+        profile_dir.mkdir()
+        monkeypatch.setattr(
+            "app.resume_import.storage._is_link_or_reparse_point",
+            lambda p: p == profile_dir,
+        )
+
+    with pytest.raises(StorageError):
+        storage.commit(
+            staged,
+            profile_id=profile_id,
+            document_id=document_id,
+            extension=".pdf",
+        )
+    assert list(external_dir.iterdir()) == []
+    storage.discard(staged)
+    assert list(storage.temp_root.iterdir()) == []
+
+
+def test_service_upload_leaves_no_orphan_files_when_uploads_or_extracted_is_symlink(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = _create_profile(db_session, "Clara")
+    storage_root = tmp_path / "svc_storage"
+    storage_root.mkdir()
+    external_dir = tmp_path / "svc_ext"
+    external_dir.mkdir()
+
+    # First, create a legitimate document to ensure existing files are preserved
+    storage = ResumeStorage(storage_root)
+    service = ResumeImportService(db_session, storage)
+    legit_doc, legit_ext = service.upload(
+        profile.id,
+        filename="legit.pdf",
+        media_type="application/pdf",
+        stream=io.BytesIO(_pdf_bytes("Legit CV")),
+    )
+    assert legit_ext is not None and legit_ext.extracted_storage_key is not None
+
+    # Now make extracted/{other_profile} or extracted_root fail during a second upload
+    other_profile = _create_profile(db_session, "Diego")
+    bad_ext_dir = storage.extracted_root / str(other_profile.id)
+    if not _try_windows_junction(bad_ext_dir, external_dir) and not _try_symlink(
+        bad_ext_dir, external_dir, is_dir=True
+    ):
+        bad_ext_dir.mkdir()
+        monkeypatch.setattr(
+            "app.resume_import.storage._is_link_or_reparse_point",
+            lambda p: p == bad_ext_dir,
+        )
+
+    with pytest.raises(StorageError):
+        service.upload(
+            other_profile.id,
+            filename="evil.pdf",
+            media_type="application/pdf",
+            stream=io.BytesIO(_pdf_bytes("Diego CV")),
+        )
+
+    # No orphan files in external_dir, temporary/, or other_profile's uploads/
+    assert list(external_dir.iterdir()) == []
+    assert list(storage.temp_root.iterdir()) == []
+    other_upload_dir = storage.upload_root / str(other_profile.id)
+    assert not other_upload_dir.exists() or list(other_upload_dir.iterdir()) == []
+
+    # Legitimate existing files remain intact
+    assert storage.exists(legit_doc.storage_key)
+    assert storage.exists(legit_ext.extracted_storage_key)

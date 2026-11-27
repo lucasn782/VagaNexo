@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import hmac
 import os
+import stat
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
@@ -21,6 +24,15 @@ from app.resume_import.exceptions import (
 )
 from app.resume_import.hashing import CHUNK_SIZE, Sha256Accumulator
 
+_FILE_ATTRIBUTE_REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400)
+_SUPPORTS_DIR_FD = (
+    os.name == "posix"
+    and hasattr(os, "O_DIRECTORY")
+    and hasattr(os, "O_NOFOLLOW")
+    and os.open in getattr(os, "supports_dir_fd", set())
+    and os.replace in getattr(os, "supports_dir_fd", set())
+)
+
 
 @dataclass(frozen=True)
 class StagedUpload:
@@ -29,6 +41,49 @@ class StagedUpload:
     path: Path
     size: int
     sha256: str
+
+
+def _is_link_or_reparse_point(path: Path) -> bool:
+    """Return True if path is a symlink, Windows junction, or reparse point."""
+    try:
+        if path.is_symlink():
+            return True
+    except OSError:
+        return True
+
+    is_junction = getattr(path, "is_junction", None)
+    if callable(is_junction):
+        try:
+            if is_junction():
+                return True
+        except OSError:
+            return True
+
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+
+    if stat.S_ISLNK(st.st_mode):
+        return True
+    file_attrs = getattr(st, "st_file_attributes", 0)
+    return bool(file_attrs & _FILE_ATTRIBUTE_REPARSE_POINT)
+
+
+@contextmanager
+def _open_pinned_dir(directory: Path) -> Iterator[int | None]:
+    """Open a directory descriptor with O_DIRECTORY | O_NOFOLLOW on POSIX."""
+    if not _SUPPORTS_DIR_FD:
+        yield None
+        return
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(directory, flags)
+    try:
+        yield fd
+    finally:
+        os.close(fd)
 
 
 class ResumeStorage:
@@ -42,7 +97,15 @@ class ResumeStorage:
         extracted_dir: str = "extracted",
         temp_dir: str = "temporary",
     ) -> None:
-        self.root = root.expanduser().resolve()
+        self._validate_dir_name(upload_dir)
+        self._validate_dir_name(extracted_dir)
+        self._validate_dir_name(temp_dir)
+        self._configured_root = Path(os.path.abspath(root.expanduser()))
+        if _is_link_or_reparse_point(self._configured_root):
+            raise StorageError("storage root cannot be a symlink or reparse point")
+        if self._configured_root.exists() and not self._configured_root.is_dir():
+            raise StorageError("storage root must be a directory")
+        self.root = self._configured_root.resolve()
         self.upload_dir = upload_dir
         self.extracted_dir = extracted_dir
         self.temp_dir = temp_dir
@@ -73,11 +136,9 @@ class ResumeStorage:
         return self.root / self.temp_dir
 
     def ensure_ready(self) -> None:
-        try:
-            for directory in (self.upload_root, self.extracted_root, self.temp_root):
-                directory.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            raise StorageError() from exc
+        self._validate_root(create=True)
+        for directory in (self.upload_root, self.extracted_root, self.temp_root):
+            self._validate_managed_directory(directory, create=True)
 
     # ------------------------------------------------------------------
     # Upload lifecycle
@@ -85,31 +146,36 @@ class ResumeStorage:
     def stage(self, stream: BinaryIO, *, max_bytes: int) -> StagedUpload:
         """Stream an upload to a temp file, enforcing the size limit as it reads."""
         self.ensure_ready()
-        temp_path = self.temp_root / f"{uuid.uuid4().hex}.part"
+        temp_name = f"{uuid.uuid4().hex}.part"
+        temp_path = self.temp_root / temp_name
+        if _is_link_or_reparse_point(temp_path):
+            raise StorageError("temporary target cannot be a symlink or reparse point")
         hasher = Sha256Accumulator()
         size = 0
         try:
-            with temp_path.open("xb") as handle:
-                while True:
-                    chunk = stream.read(CHUNK_SIZE)
-                    if not chunk:
-                        break
-                    size += len(chunk)
-                    if size > max_bytes:
-                        raise ResumeTooLargeError("resume file exceeds the upload limit")
-                    hasher.update(chunk)
-                    handle.write(chunk)
-                handle.flush()
-                os.fsync(handle.fileno())
+            with _open_pinned_dir(self.temp_root) as dir_fd:
+                fd = self._open_exclusive_write(temp_path, temp_name, dir_fd=dir_fd)
+                with os.fdopen(fd, "wb") as handle:
+                    while True:
+                        chunk = stream.read(CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        size += len(chunk)
+                        if size > max_bytes:
+                            raise ResumeTooLargeError("resume file exceeds the upload limit")
+                        hasher.update(chunk)
+                        handle.write(chunk)
+                    handle.flush()
+                    os.fsync(handle.fileno())
         except (ResumeTooLargeError, InvalidResumeFileError):
-            temp_path.unlink(missing_ok=True)
+            self._unlink_if_regular(temp_path)
             raise
         except OSError as exc:
-            temp_path.unlink(missing_ok=True)
+            self._unlink_if_regular(temp_path)
             raise StorageError() from exc
 
         if size == 0:
-            temp_path.unlink(missing_ok=True)
+            self._unlink_if_regular(temp_path)
             raise InvalidResumeFileError("file is empty")
 
         return StagedUpload(path=temp_path, size=size, sha256=hasher.hexdigest())
@@ -123,18 +189,27 @@ class ResumeStorage:
         extension: str,
     ) -> str:
         """Atomically move a staged upload to its final private path."""
+        self.ensure_ready()
+        expected_key = self.canonical_upload_key(
+            profile_id=profile_id,
+            document_id=document_id,
+            extension=extension,
+        )
+        self._validate_staged_source(staged.path)
+
         target_dir = self.upload_root / str(profile_id)
+        self._validate_profile_directory(self.upload_root, target_dir)
         target = target_dir / f"{document_id}{extension}"
+        self._validate_new_target_file(target)
+
         try:
-            target_dir.mkdir(parents=True, exist_ok=True)
-            self._ensure_within(self.upload_root, target)
-            os.replace(staged.path, target)
+            self._atomic_replace(staged.path, target)
         except OSError as exc:
             raise StorageError() from exc
-        return self.relative_key(target)
+        return expected_key
 
     def discard(self, staged: StagedUpload) -> None:
-        staged.path.unlink(missing_ok=True)
+        self._unlink_if_regular(staged.path)
 
     def write_extracted_text(
         self,
@@ -145,21 +220,31 @@ class ResumeStorage:
     ) -> str:
         """Write a UTF-8 mirror of the extracted text, atomically."""
         self.ensure_ready()
+        expected_key = self.canonical_extracted_key(
+            profile_id=profile_id,
+            document_id=document_id,
+        )
         target_dir = self.extracted_root / str(profile_id)
+        self._validate_profile_directory(self.extracted_root, target_dir)
         target = target_dir / f"{document_id}.txt"
-        temp_path = self.temp_root / f"{uuid.uuid4().hex}.part"
+        self._validate_new_target_file(target)
+
+        temp_name = f"{uuid.uuid4().hex}.part"
+        temp_path = self.temp_root / temp_name
+        if _is_link_or_reparse_point(temp_path):
+            raise StorageError("temporary target cannot be a symlink or reparse point")
         try:
-            target_dir.mkdir(parents=True, exist_ok=True)
-            self._ensure_within(self.extracted_root, target)
-            with temp_path.open("xb") as handle:
-                handle.write(text.encode("utf-8"))
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temp_path, target)
+            with _open_pinned_dir(self.temp_root) as dir_fd:
+                fd = self._open_exclusive_write(temp_path, temp_name, dir_fd=dir_fd)
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(text.encode("utf-8"))
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            self._atomic_replace(temp_path, target)
         except OSError as exc:
-            temp_path.unlink(missing_ok=True)
+            self._unlink_if_regular(temp_path)
             raise StorageError() from exc
-        return self.relative_key(target)
+        return expected_key
 
     # ------------------------------------------------------------------
     # Lookup, ownership and deletion
@@ -224,6 +309,7 @@ class ResumeStorage:
         return expected if hmac.compare_digest(storage_key, expected) else None
 
     def relative_key(self, path: Path) -> str:
+        self._validate_root(create=False)
         try:
             self._ensure_within(self.root, path)
             return path.resolve().relative_to(self.root).as_posix()
@@ -231,6 +317,7 @@ class ResumeStorage:
             raise StorageError() from exc
 
     def resolve(self, storage_key: str) -> Path:
+        self._validate_root(create=False)
         parts = self._validate_relative_key(storage_key)
         candidate = self._assert_no_symlinks(self.root, parts)
         resolved = candidate.resolve()
@@ -261,6 +348,123 @@ class ResumeStorage:
     # Internal helpers
     # ------------------------------------------------------------------
     @staticmethod
+    def _validate_dir_name(name: str) -> None:
+        if (
+            not name
+            or name.strip() != name
+            or "/" in name
+            or "\\" in name
+            or ":" in name
+            or "\x00" in name
+            or name in (".", "..")
+        ):
+            raise StorageError("managed directory name is invalid")
+
+    def _validate_root(self, *, create: bool) -> None:
+        if _is_link_or_reparse_point(self._configured_root):
+            raise StorageError("storage root cannot be a symlink or reparse point")
+        if self._configured_root.exists():
+            if not self._configured_root.is_dir():
+                raise StorageError("storage root must be a directory")
+        elif create:
+            try:
+                self._configured_root.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                raise StorageError() from exc
+            if (
+                _is_link_or_reparse_point(self._configured_root)
+                or not self._configured_root.is_dir()
+            ):
+                raise StorageError("storage root failed post-creation integrity check")
+        if self._configured_root.exists() and self._configured_root.resolve() != self.root:
+            raise StorageError("storage root resolved outside expected location")
+
+    def _validate_managed_directory(self, directory: Path, *, create: bool) -> None:
+        if _is_link_or_reparse_point(directory):
+            raise StorageError("storage directory cannot be a symlink or reparse point")
+        if directory.exists():
+            if not directory.is_dir():
+                raise StorageError("storage directory path is occupied by a non-directory")
+        elif create:
+            try:
+                directory.mkdir(exist_ok=True)
+            except OSError as exc:
+                raise StorageError() from exc
+        if _is_link_or_reparse_point(directory) or not directory.is_dir():
+            raise StorageError("storage directory failed integrity verification")
+        resolved = directory.resolve()
+        if resolved != directory or resolved.parent != self.root:
+            raise StorageError("storage directory escaped storage root")
+
+    def _validate_profile_directory(self, parent_root: Path, profile_dir: Path) -> None:
+        if _is_link_or_reparse_point(profile_dir):
+            raise StorageError("profile storage directory cannot be a symlink or reparse point")
+        if profile_dir.exists():
+            if not profile_dir.is_dir():
+                raise StorageError("profile storage path is not a directory")
+        else:
+            try:
+                profile_dir.mkdir(exist_ok=True)
+            except OSError as exc:
+                raise StorageError() from exc
+        if _is_link_or_reparse_point(profile_dir) or not profile_dir.is_dir():
+            raise StorageError("profile storage directory failed integrity check")
+        resolved = profile_dir.resolve()
+        if resolved != profile_dir or resolved.parent != parent_root:
+            raise StorageError("profile storage directory escaped managed root")
+
+    def _validate_staged_source(self, staged_path: Path) -> None:
+        if _is_link_or_reparse_point(staged_path):
+            raise StorageError("staged upload cannot be a symlink or reparse point")
+        if staged_path.parent != self.temp_root:
+            raise StorageError("staged upload must reside in temporary storage")
+        resolved = staged_path.resolve()
+        if resolved != staged_path or resolved.parent != self.temp_root:
+            raise StorageError("staged upload escaped temporary storage")
+        if not staged_path.is_file():
+            raise StorageError("staged upload file is missing")
+
+    @staticmethod
+    def _validate_new_target_file(target: Path) -> None:
+        if _is_link_or_reparse_point(target):
+            raise StorageError("target path cannot be a symlink or reparse point")
+        if target.exists():
+            raise StorageError("target resume file already exists")
+
+    @staticmethod
+    def _open_exclusive_write(path: Path, filename: str, *, dir_fd: int | None) -> int:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_BINARY"):
+            flags |= os.O_BINARY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        if dir_fd is not None:
+            return os.open(filename, flags, 0o600, dir_fd=dir_fd)
+        return os.open(path, flags, 0o600)
+
+    @staticmethod
+    def _atomic_replace(source: Path, target: Path) -> None:
+        if _is_link_or_reparse_point(source) or _is_link_or_reparse_point(target):
+            raise StorageError("cannot replace across symlinks or reparse points")
+        if _SUPPORTS_DIR_FD:
+            with (
+                _open_pinned_dir(source.parent) as src_fd,
+                _open_pinned_dir(target.parent) as dst_fd,
+            ):
+                os.replace(source.name, target.name, src_dir_fd=src_fd, dst_dir_fd=dst_fd)
+            return
+        os.replace(source, target)
+
+    @staticmethod
+    def _unlink_if_regular(path: Path) -> None:
+        if _is_link_or_reparse_point(path):
+            return
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            return
+
+    @staticmethod
     def _validate_relative_key(storage_key: str) -> tuple[str, ...]:
         if not isinstance(storage_key, str) or not storage_key:
             raise StorageError("storage key must not be empty")
@@ -282,25 +486,28 @@ class ResumeStorage:
         current = base
         for part in parts:
             current = current / part
-            if current.is_symlink():
+            if _is_link_or_reparse_point(current):
                 raise StorageError("symbolic links are not permitted in storage")
         return current
 
     @classmethod
     def _ensure_within(cls, root: Path, path: Path) -> None:
-        resolved_root = root.resolve()
-        if path.is_symlink():
+        if _is_link_or_reparse_point(root) or _is_link_or_reparse_point(path):
             raise StorageError("symbolic links are not permitted in storage")
-        if path.is_relative_to(resolved_root):
-            rel_parts = path.relative_to(resolved_root).parts
-            if rel_parts:
-                cls._assert_no_symlinks(resolved_root, rel_parts)
+        lex_root = Path(os.path.abspath(root))
+        lex_path = Path(os.path.abspath(path))
+        if lex_path == lex_root or not lex_path.is_relative_to(lex_root):
+            raise StorageError()
+        rel_parts = lex_path.relative_to(lex_root).parts
+        if rel_parts:
+            cls._assert_no_symlinks(lex_root, rel_parts)
+        resolved_root = root.resolve()
         resolved = path.resolve()
         if resolved == resolved_root or not resolved.is_relative_to(resolved_root):
             raise StorageError()
 
     def _remove_empty_directory(self, directory: Path) -> None:
-        if directory.is_symlink():
+        if _is_link_or_reparse_point(directory):
             return
         if directory.parent not in (self.upload_root, self.extracted_root):
             return

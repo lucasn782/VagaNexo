@@ -3,7 +3,7 @@
 ## Resumo
 
 - **Objetivo**: implementar o módulo **Resume Importer v1.0** para importação, validação binária, deduplicação por SHA-256, armazenamento privado e extração/normalização de currículos em PDF e DOCX, além de corrigir definitivamente a infraestrutura de testes com Alembic no banco `vaganexo_test`.
-- **Data e horário**: 26/11/2026, 22:52 −03:00.
+- **Data e horário**: 26/11/2026, 23:04 −03:00.
 - **Branch**: `feat/resume-import`.
 - **Commit-base**: `f4d3fff` (`Merge pull request #1 from lucasn782/feat/profile-engine`, contendo `6584f0a`).
 
@@ -106,15 +106,15 @@ Prefixo: `/api/v1/profiles/{profile_id}/resume-documents`
 | Frontend | APROVADO |
 
 Detalhes das execuções:
-- `uv run pytest -v --cov=app --cov-report=term-missing`: **95 passed** (`6.36s`), cobertura total de **92%** em `app`, sem avisos de depreciação do Alembic após `path_separator = os` em `backend/alembic.ini`.
+- `uv run pytest -v --cov=app --cov-report=term-missing`: **103 passed** (`7.40s`), cobertura total de **89%** em `app`, sem avisos de depreciação do Alembic após `path_separator = os` em `backend/alembic.ini`.
 - `uv run ruff check .`: `All checks passed!`.
 - `uv run ruff format --check .`: `79 files already formatted`.
 - `uv run mypy app`: `Success: no issues found in 62 source files`.
 - Teste de downgrade e re-upgrade Alembic (`backend/tests/integration/test_migration_downgrade.py` em banco descartável `vaganexo_migration_test`): **APROVADO**.
 - Testes de integração entre perfis (`test_resume_import_api.py`): **APROVADO**.
-- Testes de segurança do armazenamento (`test_resume_import_service.py`): **APROVADO**.
+- Testes de segurança do armazenamento (`test_resume_import_service.py`): **APROVADO** (incluindo symlinks, symlinks quebrados, junctions NTFS reais via `mklink /J` nos 3 diretórios principais, raiz e subdiretórios de perfil, e ausência de arquivos órfãos).
 - Teste ao vivo com `uvicorn app.main:app --host 127.0.0.1 --port 8019` contra `vaganexo_test`: **LIVE_API_HARDENING_OK** (upload PDF/DOCX, deduplicação `409`, listagem, detalhes, extração, isolamento `404`, proteção contra exclusão cruzada via registro manual e exclusão legítima `204`).
-- Frontend: `npm run lint`, `npx tsc --noEmit` e `npm run build` aprovados (código 0, executados antes da etapa final de documentação sem alterações no frontend).
+- Frontend: `npm run lint`, `npx tsc --noEmit` e `npm run build` aprovados (código 0).
 
 ### Correção da infraestrutura de testes
 
@@ -159,6 +159,23 @@ Detalhes das execuções:
 - `backend/tests/integration/test_resume_import_api.py`: adicionado teste de integração rejeitando travessia no cadastro manual (`422`) e comprovando preservação dos arquivos do perfil B após exclusão de registro manual no perfil A.
 - `backend/tests/integration/test_migration_downgrade.py`: teste isolado em banco descartável `vaganexo_migration_test` validando `upgrade head`, inserção de todos os 6 estados, `downgrade` para `bdd3fb3a0174` (conversão de `completed` e `completed_with_warnings` para `parsed`, preservação dos demais registros e perda esperada de `resume_extractions`) e re-`upgrade` até `head`.
 - `docs/architecture/PROFILE_ENGINE.md` e `docs/architecture/RESUME_IMPORTER.md`: adicionada a seção **Segurança, autenticação e limites de implantação**.
+
+## Hardening final dos diretórios principais de armazenamento
+
+1. **Problema identificado**: `ResumeStorage.ensure_ready()` executava `directory.mkdir(parents=True, exist_ok=True)` sem verificar se a raiz ou os diretórios principais (`uploads/`, `extracted/`, `temporary/`) já existiam como symlink, junction do Windows ou reparse point. Além disso, `ResumeStorage.__init__()` executava `.resolve()` prematuramente sobre a raiz configurada.
+2. **Causa raiz**: resolução simbólica antes da inspeção de componentes e confiança implícita em `mkdir(exist_ok=True)` como validação estrutural.
+3. **Alterações realizadas**:
+   - Criação de `_is_link_or_reparse_point()` combinando `Path.is_symlink()`, `Path.is_junction()` (Python 3.12+/Windows) e `os.lstat()` (`stat.S_ISLNK` + `FILE_ATTRIBUTE_REPARSE_POINT`).
+   - `ResumeStorage.__init__()` passa a preservar o caminho léxico (`os.path.abspath`) e rejeitar raiz que seja symlink, reparse point ou arquivo comum, sem restringir diretórios pais legítimos do sistema operacional.
+   - `ensure_ready()` valida a raiz e os três diretórios principais (`uploads/`, `extracted/`, `temporary/`) antes e depois da criação.
+   - `stage()`, `commit()` e `write_extracted_text()` validam o diretório de origem temporária, os subdiretórios de perfil (`uploads/{profile_id}`, `extracted/{profile_id}`) e o caminho-alvo antes de qualquer escrita ou `os.replace()`, impedindo sobrescrita de arquivos existentes e derivando `storage_key` dos UUIDs confiáveis antes da movimentação atômica.
+   - Em sistemas POSIX, `_open_pinned_dir()` utiliza `O_RDONLY | O_DIRECTORY | O_NOFOLLOW` e `os.open`/`os.replace` com `dir_fd`.
+4. **Arquivos modificados**: `backend/app/resume_import/storage.py`, `backend/tests/unit/test_resume_import_service.py`, `docs/architecture/RESUME_IMPORTER.md`, `docs/development/RESUME_IMPORTER_REPORT.md`.
+5. **Testes criados**: suíte parametrizada cobrindo `uploads/`, `extracted/` e `temporary/` como symlinks, symlinks quebrados e junctions NTFS reais (`mklink /J`), raiz e subdiretórios de perfil manipulados, arquivos comuns ocupando diretórios e verificação de ausência de arquivos órfãos.
+6. **Resultados reais**: **103 passed** (`89%` de cobertura), `ruff check`, `ruff format --check` (`79 files`), `mypy` (`62 files`), `LIVE_API_HARDENING_OK` e frontend (`lint`, `tsc`, `build`) aprovados.
+7. **Comportamento em Windows**: junctions reais via `mklink /J` e reparse points foram detectados e rejeitados via `Path.is_junction()` e `FILE_ATTRIBUTE_REPARSE_POINT`; quando o SO restringe `os.symlink` sem privilégio, os testes executam fallback determinístico documentado.
+8. **Comportamento em Linux**: protegido adicionalmente por descritores fixados (`O_DIRECTORY | O_NOFOLLOW` e `dir_fd` em `os.open`/`os.replace`).
+9. **Limitações conhecidas (TOCTOU)**: no Windows, como `os.open` e `os.replace` não suportam `dir_fd`, permanece uma janela residual mínima entre a verificação prévia de reparse point e a chamada física ao sistema operacional. Em Linux, o uso de `dir_fd` com `O_DIRECTORY | O_NOFOLLOW` fecha a janela de troca de diretório.
 
 ## Segurança, autenticação e limites de implantação
 
