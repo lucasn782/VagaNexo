@@ -48,6 +48,8 @@ def test_login_sets_secure_httponly_cookie_and_returns_public_user(
         "id": body["user"]["id"],
         "email": "alice@example.com",
         "is_active": True,
+        "status": "active",
+        "email_verified_at": None,
     }
 
 

@@ -27,6 +27,12 @@ interface AuthContextValue {
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+const PUBLIC_ROUTES = new Set([
+  "/login",
+  "/register",
+  "/verify-email",
+  "/verification-sent",
+]);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -74,7 +80,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!loading && !user && pathname !== "/login") {
+    if (!loading && !user && !PUBLIC_ROUTES.has(pathname)) {
       router.replace("/login");
     }
   }, [loading, user, pathname, router]);

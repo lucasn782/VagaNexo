@@ -9,6 +9,7 @@ const geist = Geist({ subsets: ["latin"], variable: "--font-sans" });
 export const metadata: Metadata = {
   title: "VagaNexo AI",
   description: "Multi-user candidate profile and resume workspace",
+  referrer: "no-referrer",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

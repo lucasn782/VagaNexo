@@ -6,11 +6,13 @@ on:
       - main
       - feat/resume-import
       - feat/auth-multitenancy
+      - feat/account-lifecycle-security
   push:
     branches:
       - main
       - feat/resume-import
       - feat/auth-multitenancy
+      - feat/account-lifecycle-security
 
 permissions:
   contents: read

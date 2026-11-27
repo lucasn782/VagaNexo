@@ -34,6 +34,8 @@ PROFILE_TABLES = (
     "work_experiences",
     "educations",
     "candidate_profiles",
+    "email_outbox",
+    "account_action_tokens",
     "auth_sessions",
     "users",
 )

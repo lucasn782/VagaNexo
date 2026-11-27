@@ -54,3 +54,18 @@ class UserAlreadyExistsError(AuthError):
 class InvalidUserDataError(AuthError):
     status_code = 422
     detail = "invalid user data"
+
+
+class InvalidActionTokenError(AuthError):
+    status_code = 400
+    detail = "verification token is invalid or has expired"
+
+
+class RegistrationDisabledError(AuthError):
+    status_code = 403
+    detail = "public registration is currently disabled"
+
+
+class OutboxEncryptionError(AuthError):
+    status_code = 500
+    detail = "email outbox encryption configuration error"

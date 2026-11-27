@@ -5,6 +5,8 @@ export interface AuthUser {
   id: string;
   email: string;
   is_active: boolean;
+  status?: string;
+  email_verified_at?: string | null;
 }
 
 export interface CandidateProfileSummary {
@@ -59,6 +61,13 @@ async function ensureCsrfToken(): Promise<string> {
   }
 }
 
+const PUBLIC_AUTH_MUTATIONS = new Set([
+  "/api/v1/auth/login",
+  "/api/v1/auth/register",
+  "/api/v1/auth/verify-email",
+  "/api/v1/auth/resend-verification",
+]);
+
 export async function apiRequest<T>(
   path: string,
   options: RequestInit = {},
@@ -66,6 +75,7 @@ export async function apiRequest<T>(
 ): Promise<T> {
   const method = (options.method ?? "GET").toUpperCase();
   const isStateChanging = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
+  const isPublicAuthMutation = PUBLIC_AUTH_MUTATIONS.has(path);
   const headers = new Headers(options.headers);
   headers.set("Accept", "application/json");
 
@@ -73,7 +83,7 @@ export async function apiRequest<T>(
     headers.set("Content-Type", "application/json");
   }
 
-  if (isStateChanging && path !== "/api/v1/auth/login") {
+  if (isStateChanging && !isPublicAuthMutation) {
     const csrfToken = await ensureCsrfToken();
     headers.set("X-CSRF-Token", csrfToken);
   }
@@ -103,7 +113,7 @@ export async function apiRequest<T>(
       response.status === 403 &&
       detail === "CSRF validation failed" &&
       isStateChanging &&
-      path !== "/api/v1/auth/login" &&
+      !isPublicAuthMutation &&
       !_csrfRetried
     ) {
       clearInMemoryCsrfToken();
@@ -149,5 +159,33 @@ export async function fetchCurrentUser(): Promise<AuthUser> {
 export async function fetchOwnedProfiles(): Promise<CandidateProfileSummary[]> {
   return apiRequest<CandidateProfileSummary[]>("/api/v1/profiles", {
     method: "GET",
+  });
+}
+
+export async function registerRequest(
+  email: string,
+  password: string,
+): Promise<{ detail: string }> {
+  return apiRequest<{ detail: string }>("/api/v1/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export async function verifyEmailRequest(
+  token: string,
+): Promise<{ detail: string }> {
+  return apiRequest<{ detail: string }>("/api/v1/auth/verify-email", {
+    method: "POST",
+    body: JSON.stringify({ token }),
+  });
+}
+
+export async function resendVerificationRequest(
+  email: string,
+): Promise<{ detail: string }> {
+  return apiRequest<{ detail: string }>("/api/v1/auth/resend-verification", {
+    method: "POST",
+    body: JSON.stringify({ email }),
   });
 }

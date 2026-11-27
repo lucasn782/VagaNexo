@@ -22,6 +22,7 @@ from app.auth.service import AuthService
 from app.cli import run_cli
 from app.core.config import Settings
 from app.models.candidate_profile import CandidateProfile
+from app.models.enums import AccountStatus
 from app.profile.exceptions import ConflictError, InvalidProfileDataError
 from app.profile.service import ProfileService
 from app.resume_import.service import ResumeImportService
@@ -98,7 +99,7 @@ def test_inactive_user_cannot_authenticate_or_use_session(db_session: Session) -
         client_ip="127.0.0.1",
     )
 
-    user.is_active = False
+    user.set_status(AccountStatus.DISABLED)
     db_session.commit()
 
     with pytest.raises(InvalidCredentialsError):
@@ -111,11 +112,37 @@ def test_inactive_user_cannot_authenticate_or_use_session(db_session: Session) -
         service.get_active_session(raw_token)
 
 
+def test_successful_login_does_not_increment_failure_counters(db_session: Session) -> None:
+    limiter = InMemoryRateLimiter(max_attempts=2, window_seconds=60)
+    service = AuthService(db_session, rate_limiter=limiter)
+    service.create_user(email="success@example.com", password="SecretPassword123!")
+
+    for _ in range(8):
+        service.authenticate(
+            email="success@example.com",
+            password="SecretPassword123!",
+            client_ip="192.0.2.1",
+        )
+
+    limiter.check_login_allowed(
+        client_ip="192.0.2.1",
+        normalized_email="success@example.com",
+    )
+
+
 def test_redis_rate_limiter_enforces_limits_and_fails_closed_in_production() -> None:
     class FakeRedis:
         def __init__(self, *, fail: bool = False) -> None:
             self.fail = fail
             self.counts: dict[str, int] = {}
+
+        def get(self, key: str) -> int | None:
+            if self.fail:
+                raise RedisError("connection refused")
+            return self.counts.get(key)
+
+        def delete(self, key: str) -> None:
+            self.counts.pop(key, None)
 
         def eval(self, _script: str, _numkeys: int, key: str, _ttl: str) -> int:
             if self.fail:
