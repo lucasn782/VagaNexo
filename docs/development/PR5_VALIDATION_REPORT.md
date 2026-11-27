@@ -3,7 +3,8 @@
 **Data:** 27/11/2026
 **Branch:** `feat/account-lifecycle-security`
 **Base:** `main` (`0076d069e5365cb631a2e51171dfe72bb971f1c0`)
-**Head auditado inicialmente:** `df6360ffaf65f432624fe4acff76bce9e2e72c78`
+**Head inicialmente auditado:** `df6360ffaf65f432624fe4acff76bce9e2e72c78`
+**Head publicado e validado pelo CI:** `97c3daf6b8e2e62b9af4cfa86ee9646286e6b365`
 **Merge:** não executado.
 
 ## 1. Resumo executivo
@@ -25,6 +26,7 @@ Backend, migrações, frontend, lint, tipos e build local passaram. A suíte loc
 | Reviews | Nenhuma revisão submetida |
 | Diff original | 39 arquivos; +2743 / −71; `git diff --check` limpo |
 | CI inicial | [Run 46063943921](https://github.com/lucasn782/VagaNexo/actions/runs/46063943921), 3/3 jobs aprovados |
+| CI pós-correções | [Run 46067235778](https://github.com/lucasn782/VagaNexo/actions/runs/46067235778), pull_request, SHA `97c3daf6b8e2e62b9af4cfa86ee9646286e6b365`, 3/3 jobs aprovados |
 
 O `gh auth status` foi tentado como solicitado, mas o CLI reportou a credencial local inválida e o proxy de rede recusou a conexão com `api.github.com`. Metadados, reviews, jobs e logs do PR foram conferidos pelo conector GitHub.
 
@@ -82,6 +84,6 @@ Antes da suíte, a conexão real apontou para `vaganexo_test`. O teste de migra�
 
 ## 8. Estado final e recomendação
 
-Os novos commits, push e execução do CI para o head final são **PENDING** até a publicação e verificação da branch. Nenhum merge será executado nesta tarefa.
+Commits publicados: `79ebf2a` (correções), `36e23c1` (testes) e `97c3daf` (relatórios). O PR permanece aberto e sem merge. O CI pós-correções terminou com Backend Linux, Backend Windows e Frontend aprovados no SHA informado acima. A atualização documental atual é posterior a esse run; uma execução da mesma branch está sendo disparada para validar também o commit documental final. Nenhum merge será executado nesta tarefa.
 
 **READY WITH DOCUMENTED LIMITATIONS**, condicionado a CI 3/3 verde para o head publicado e revisão humana. Não há achado crítico ou alto pendente. A recomendação segue sujeita à limitação de auditoria automatizada de dependências e à ausência de E2E do frontend, explicitadas acima.
