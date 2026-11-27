@@ -466,7 +466,9 @@ def test_storage_rejects_windows_junctions_in_main_directories(
     external_dir.mkdir()
     link_path = storage_root / dir_name
 
-    if not _try_windows_junction(link_path, external_dir):
+    if not _try_windows_junction(link_path, external_dir) and not _try_symlink(
+        link_path, external_dir, is_dir=True
+    ):
         link_path.mkdir()
         monkeypatch.setattr(
             "app.resume_import.storage._is_link_or_reparse_point",

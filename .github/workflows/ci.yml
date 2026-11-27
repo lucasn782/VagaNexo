@@ -157,9 +157,11 @@ jobs:
         working-directory: frontend
         run: npm run lint
 
-      - name: Run TypeScript type check
+      - name: Generate Next.js types and run TypeScript type check
         working-directory: frontend
-        run: npx tsc --noEmit
+        run: |
+          npx next typegen
+          npx tsc --noEmit
 
       - name: Build production bundle
         working-directory: frontend
