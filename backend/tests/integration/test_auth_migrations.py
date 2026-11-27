@@ -129,7 +129,7 @@ def test_auth_migration_preserves_legacy_profiles_and_downgrades_cleanly() -> No
             ).fetchone()
             assert row is not None
             assert row[0] == "Legacy Candidate"
-            assert row[1] is None
+            assert row[1] == user_id
 
         # 3. Downgrade only the new revision; legacy users, sessions and profiles remain.
         with engine.begin() as conn:
