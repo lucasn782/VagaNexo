@@ -22,6 +22,7 @@ from app.database.dependencies import get_db
 from app.main import app
 
 TEST_DATABASE_NAME = "vaganexo_test"
+ALLOWED_TEST_DATABASES = {"vaganexo_test", "vaganexo_migration_test"}
 
 PROFILE_TABLES = (
     "resume_extractions",
@@ -47,8 +48,8 @@ def _test_database_url() -> URL:
         url = make_url(override)
     else:
         url = make_url(get_settings().database_url).set(database=TEST_DATABASE_NAME)
-    if not url.database or not url.database.endswith("_test"):
-        raise RuntimeError("refusing to run tests against a database that is not a *_test database")
+    if url.database not in ALLOWED_TEST_DATABASES:
+        raise RuntimeError("refusing to run tests against a database outside the test allowlist")
     return url
 
 
@@ -67,11 +68,14 @@ def _ensure_database(url: URL) -> None:
 
 
 def _run_test_migrations(engine: Engine) -> None:
-    if not engine.url.database or not engine.url.database.endswith("_test"):
-        raise RuntimeError("refusing to run migrations against a non-test database")
+    if engine.url.database not in ALLOWED_TEST_DATABASES:
+        raise RuntimeError("refusing to run migrations outside the test database allowlist")
     alembic_ini = Path(__file__).resolve().parents[1] / "alembic.ini"
     config = Config(str(alembic_ini))
     with engine.begin() as connection:
+        actual_database = connection.execute(text("SELECT current_database()")).scalar_one()
+        if actual_database not in ALLOWED_TEST_DATABASES:
+            raise RuntimeError("refusing to run migrations against an unauthorized database")
         config.attributes["connection"] = connection
         command.upgrade(config, "head")
 
@@ -79,6 +83,8 @@ def _run_test_migrations(engine: Engine) -> None:
 @pytest.fixture(scope="session")
 def test_engine() -> Iterator[Engine]:
     url = _test_database_url()
+    if url.database != TEST_DATABASE_NAME:
+        raise RuntimeError("the general test suite may use only vaganexo_test")
     _ensure_database(url)
     engine = create_engine(url, pool_pre_ping=True)
     _run_test_migrations(engine)
@@ -90,8 +96,12 @@ def test_engine() -> Iterator[Engine]:
 
 @pytest.fixture()
 def db_session(test_engine: Engine) -> Iterator[Session]:
-    if not test_engine.url.database or not test_engine.url.database.endswith("_test"):
-        raise RuntimeError("refusing to truncate tables in a non-test database")
+    if test_engine.url.database != TEST_DATABASE_NAME:
+        raise RuntimeError("refusing to truncate outside vaganexo_test")
+    with test_engine.connect() as connection:
+        actual_database = connection.execute(text("SELECT current_database()")).scalar_one()
+    if actual_database != TEST_DATABASE_NAME:
+        raise RuntimeError("refusing to truncate tables in an unauthorized database")
     existing_tables = set(inspect(test_engine).get_table_names(schema="public"))
     missing_tables = set(PROFILE_TABLES) - existing_tables
     if missing_tables:

@@ -15,11 +15,13 @@ MIGRATION_DB_NAME = "vaganexo_migration_test"
 
 def _migration_url() -> URL:
     base = _test_database_url()
-    assert base.database != "vaganexo"
+    assert base.database in {"vaganexo_test", MIGRATION_DB_NAME}
     return base.set(database=MIGRATION_DB_NAME)
 
 
 def _recreate_disposable_db(url: URL) -> None:
+    if url.database != MIGRATION_DB_NAME:
+        raise RuntimeError("refusing to recreate a database outside the migration test allowlist")
     admin_url = url.set(drivername="postgresql", database="postgres")
     with psycopg.connect(
         admin_url.render_as_string(hide_password=False),
@@ -35,6 +37,8 @@ def _recreate_disposable_db(url: URL) -> None:
 
 
 def _drop_disposable_db(url: URL) -> None:
+    if url.database != MIGRATION_DB_NAME:
+        raise RuntimeError("refusing to drop a database outside the migration test allowlist")
     admin_url = url.set(drivername="postgresql", database="postgres")
     with psycopg.connect(
         admin_url.render_as_string(hide_password=False),
@@ -54,6 +58,11 @@ def test_auth_migration_preserves_legacy_profiles_and_downgrades_cleanly() -> No
     alembic_ini = Path(__file__).resolve().parents[2] / "alembic.ini"
     config = Config(str(alembic_ini))
     engine = create_engine(url, pool_pre_ping=True)
+    with engine.connect() as connection:
+        actual_database = connection.execute(text("SELECT current_database()")).scalar_one()
+    if actual_database != MIGRATION_DB_NAME:
+        engine.dispose()
+        raise RuntimeError("refusing migration test because current_database() did not match")
 
     try:
         # 1. Upgrade to the auth base and insert pre-lifecycle records.
