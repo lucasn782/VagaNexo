@@ -420,3 +420,16 @@ Dependências explícitas de configuração para produção e decisões antes da
 2. **Fase 2 — Recuperação e Alteração de Senha + Sessões:** `/forgot-password`, `/reset-password`, `/change-password`, metadados/listagem/revogação de `AuthSession` (`/sessions/*`) e limpeza em lotes.
 3. **Fase 3 — MFA TOTP:** `UserTotpFactor`, `MfaRecoveryCode`, `MfaChallenge`, endpoints `/mfa/*` e fluxo de desafio no frontend.
 4. **Fase 4 — Preparação / Integração SSO OIDC (etapa futura):** `ExternalIdentity` e fluxo OIDC com PKCE.
+
+---
+
+## 19. Decisões confirmadas pela auditoria independente
+
+O código atual e a auditoria do PR #5 prevalecem sobre os trechos deste documento que descrevem o estado anterior à implementação.
+
+- **Locks do ciclo de tokens:** emissão, reenvio, verificação e consumo serializam por linha de usuário antes de acessar tokens. A ordem é `User → AccountActionToken`, para impedir que reenvios concorrentes preservem múltiplos tokens válidos e para evitar deadlocks entre emissão e consumo.
+- **Leases da Outbox:** cada claim contém um `claim_token` aleatório persistido. Atualizações de sucesso e falha são condicionadas a esse identificador; um worker antigo não pode substituir o estado definido por uma aquisição posterior.
+- **Mensagens obsoletas:** antes do envio, o worker confirma sob lock que a conta segue pendente e que o token permanece válido, não consumido e não revogado. Mensagens sem finalidade eliminam o payload cifrado.
+- **Chaves da Outbox:** `EMAIL_OUTBOX_ENCRYPTION_KEYS` é obrigatório também em desenvolvimento e testes; não existe chave padrão. Cada ambiente deve usar chave aleatória própria de 32 bytes, codificada em base64url e versionada.
+- **SMTP:** STARTTLS e SMTP_SSL usam `ssl.create_default_context()` para validar certificado e hostname. STARTTLS e SSL simultâneos são configuração inválida.
+- **Migrações:** a revisão atual é `f3a4b5c6d7e8`, após `e2f3a4b5c6d7`; ela adiciona o identificador de fencing da lease da Outbox.

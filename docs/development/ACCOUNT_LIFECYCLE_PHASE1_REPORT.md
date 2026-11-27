@@ -16,7 +16,7 @@ Phase 1 adds configurable public registration, email verification, purpose-scope
 
 ## 3. User model and migration
 
-Added `status` and `email_verified_at`. The migration is `e2f3a4b5c6d7`, directly after `d1e2f3a4b5c6`. It creates `account_action_tokens` and `email_outbox`; it does not drop or rewrite users, profiles, or sessions on upgrade. Downgrade of this revision removes only the new tables and columns.
+Added `status` and `email_verified_at`. The initial lifecycle migration is `e2f3a4b5c6d7`, directly after `d1e2f3a4b5c6`. The current chain head is `f3a4b5c6d7e8`, which adds the Outbox claim fencing token. Upgrade does not drop or rewrite users, profiles, or sessions. Downgrading the lifecycle migration removes the new tables and columns.
 
 `password_changed_at` was not added because password change/reset is excluded from this phase. Existing active accounts continue to authenticate while `email_verified_at` is null.
 
@@ -24,7 +24,7 @@ Added `status` and `email_verified_at`. The migration is `e2f3a4b5c6d7`, directl
 
 `AccountActionToken` supports future purposes structurally; only email verification is used. Old active tokens for the same user and purpose are revoked when a replacement is issued. Tokens expire after the configured `EMAIL_VERIFICATION_TTL_HOURS` (24 hours by default).
 
-`EmailOutbox` stores only encrypted temporary payloads, with key versions and AES-GCM associated data bound to the outbox ID and template. Successful delivery or terminal retry failure clears the encrypted payload. Claiming uses `FOR UPDATE SKIP LOCKED`, a lease, bounded retries, and backoff.
+`EmailOutbox` stores only encrypted temporary payloads, with key versions and AES-GCM associated data bound to the outbox ID and template. Successful delivery, terminal retry failure, or stale-message discard clears the encrypted payload. Claiming uses `FOR UPDATE SKIP LOCKED`, a lease with a per-claim fencing token, bounded retries, and backoff.
 
 `EmailProvider` has `FakeEmailProvider` and `SMTPEmailProvider`. The development Compose stack supplies Mailpit at `127.0.0.1:1025` (SMTP) and `127.0.0.1:8025` (web UI). Set `MAIL_PROVIDER=smtp` for Mailpit; the checked-in backend environment example uses this local-only, unauthenticated configuration. Production rejects the fake provider and requires TLS or SSL for SMTP.
 
@@ -86,7 +86,8 @@ The architecture document was committed as `docs: add account lifecycle architec
 ## 12. Limitations and Phase 2
 
 - Password reset/change, session management, MFA, and SSO remain out of scope.
-- The outbox uses a development fallback encryption key outside production; production must configure a versioned `EMAIL_OUTBOX_ENCRYPTION_KEYS` keyring and external SMTP credentials.
+- `EMAIL_OUTBOX_ENCRYPTION_KEYS` is mandatory in every environment. Provide a unique random 32-byte key per environment; never reuse a development/test key in production.
 - Worker and Beat are launched as separate Celery processes; Compose provides the local Mailpit service but does not package the Python application into worker containers.
-- Concurrent token consumption is atomic in PostgreSQL; an explicit two-request concurrency stress test remains to be added before claiming that acceptance criterion as tested.
+- Independent PostgreSQL transactions verified that only one concurrent request can consume a token. Token issuance and verification use the same user-before-token lock order.
+- STARTTLS and SMTP_SSL now explicitly validate certificates and hostnames.
 - **Fase 2:** password recovery and change, session inventory/revocation, and session cleanup.
