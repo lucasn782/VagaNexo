@@ -26,7 +26,9 @@ class AuthenticationRequiredError(AuthError):
 
 class CSRFError(AuthError):
     status_code = 403
-    detail = "invalid or missing CSRF token"
+    # Contract consumed by the frontend single-retry logic in
+    # frontend/src/lib/api.ts; keep both values in sync.
+    detail = "CSRF validation failed"
 
 
 class OriginNotAllowedError(AuthError):

@@ -28,7 +28,8 @@ let inFlightCsrfPromise: Promise<string> | null = null;
 
 export function clearInMemoryCsrfToken(): void {
   inMemoryCsrfToken = null;
-  inFlightCsrfPromise = null;
+  // Keep any in-flight request so concurrent retries share the same rotated
+  // token instead of racing and invalidating each other.
 }
 
 async function ensureCsrfToken(): Promise<string> {

@@ -107,9 +107,11 @@ def test_csrf_origin_logout_and_revoked_session_rejection(
     assert login_resp.status_code == 200
     csrf_token = login_resp.json()["csrf_token"]
 
-    # State-changing request without CSRF fails
+    # State-changing request without CSRF fails. The detail string is the
+    # contract used by the frontend to refresh the token and retry once.
     no_csrf = unauthenticated_client.post("/api/v1/profiles", json={"full_name": "Blocked"})
     assert no_csrf.status_code == 403
+    assert no_csrf.json() == {"detail": "CSRF validation failed"}
 
     # State-changing request with wrong CSRF fails
     bad_csrf = unauthenticated_client.post(
@@ -118,6 +120,7 @@ def test_csrf_origin_logout_and_revoked_session_rejection(
         headers={"X-CSRF-Token": "wrong-token"},
     )
     assert bad_csrf.status_code == 403
+    assert bad_csrf.json() == {"detail": "CSRF validation failed"}
 
     # Rotate CSRF via /csrf
     csrf_resp = unauthenticated_client.get("/api/v1/auth/csrf")
