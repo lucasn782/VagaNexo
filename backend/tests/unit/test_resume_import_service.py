@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.auth.service import AuthService
 from app.models.candidate_profile import CandidateProfile
 from app.models.enums import ParsingStatus
 from app.models.resume_document import ResumeDocument
@@ -50,8 +51,19 @@ def _docx_bytes(text: str) -> bytes:
     return buffer.getvalue()
 
 
-def _create_profile(session: Session, name: str = "Ana Souza") -> CandidateProfile:
-    profile = CandidateProfile(full_name=name)
+def _create_user_id(session: Session) -> uuid.UUID:
+    user = AuthService(session).create_user(
+        email=f"user-{uuid.uuid4().hex[:8]}@example.com",
+        password="TestPassword123!",
+    )
+    return user.id
+
+
+def _create_profile(
+    session: Session, name: str = "Ana Souza", *, user_id: uuid.UUID | None = None
+) -> CandidateProfile:
+    owner_id = user_id if user_id is not None else _create_user_id(session)
+    profile = CandidateProfile(full_name=name, user_id=owner_id)
     session.add(profile)
     session.commit()
     session.refresh(profile)
@@ -91,10 +103,11 @@ def test_service_upload_deduplicates_within_profile_and_allows_other_profile(
     db_session: Session,
     tmp_path: Path,
 ) -> None:
-    profile_a = _create_profile(db_session, "Ana")
-    profile_b = _create_profile(db_session, "Bruno")
+    owner_id = _create_user_id(db_session)
+    profile_a = _create_profile(db_session, "Ana", user_id=owner_id)
+    profile_b = _create_profile(db_session, "Bruno", user_id=owner_id)
     storage = ResumeStorage(tmp_path)
-    service = ResumeImportService(db_session, storage)
+    service = ResumeImportService(db_session, storage, user_id=owner_id)
     payload = _pdf_bytes("Ana Souza - Python Engineer")
 
     doc_a, ext_a = service.upload(
@@ -134,8 +147,11 @@ def test_service_scanned_pdf_and_truncation_warnings(
     tmp_path: Path,
 ) -> None:
     profile = _create_profile(db_session)
+    assert profile.user_id is not None
     storage = ResumeStorage(tmp_path)
-    service = ResumeImportService(db_session, storage, max_text_characters=10)
+    service = ResumeImportService(
+        db_session, storage, max_text_characters=10, user_id=profile.user_id
+    )
 
     scanned_doc, scanned_ext = service.upload(
         profile.id,
@@ -164,8 +180,9 @@ def test_service_delete_removes_db_and_physical_files(
     tmp_path: Path,
 ) -> None:
     profile = _create_profile(db_session)
+    assert profile.user_id is not None
     storage = ResumeStorage(tmp_path)
-    service = ResumeImportService(db_session, storage)
+    service = ResumeImportService(db_session, storage, user_id=profile.user_id)
 
     document, extraction = service.upload(
         profile.id,
@@ -271,10 +288,11 @@ def test_delete_manual_record_cannot_delete_other_profile_upload_or_extraction(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    profile_a = _create_profile(db_session, "Ana")
-    profile_b = _create_profile(db_session, "Bruno")
+    owner_id = _create_user_id(db_session)
+    profile_a = _create_profile(db_session, "Ana", user_id=owner_id)
+    profile_b = _create_profile(db_session, "Bruno", user_id=owner_id)
     storage = ResumeStorage(tmp_path)
-    service = ResumeImportService(db_session, storage)
+    service = ResumeImportService(db_session, storage, user_id=owner_id)
 
     doc_b, ext_b = service.upload(
         profile_b.id,
@@ -448,7 +466,9 @@ def test_storage_rejects_windows_junctions_in_main_directories(
     external_dir.mkdir()
     link_path = storage_root / dir_name
 
-    if not _try_windows_junction(link_path, external_dir):
+    if not _try_windows_junction(link_path, external_dir) and not _try_symlink(
+        link_path, external_dir, is_dir=True
+    ):
         link_path.mkdir()
         monkeypatch.setattr(
             "app.resume_import.storage._is_link_or_reparse_point",
@@ -524,7 +544,8 @@ def test_service_upload_leaves_no_orphan_files_when_uploads_or_extracted_is_syml
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    profile = _create_profile(db_session, "Clara")
+    owner_id = _create_user_id(db_session)
+    profile = _create_profile(db_session, "Clara", user_id=owner_id)
     storage_root = tmp_path / "svc_storage"
     storage_root.mkdir()
     external_dir = tmp_path / "svc_ext"
@@ -532,7 +553,7 @@ def test_service_upload_leaves_no_orphan_files_when_uploads_or_extracted_is_syml
 
     # First, create a legitimate document to ensure existing files are preserved
     storage = ResumeStorage(storage_root)
-    service = ResumeImportService(db_session, storage)
+    service = ResumeImportService(db_session, storage, user_id=owner_id)
     legit_doc, legit_ext = service.upload(
         profile.id,
         filename="legit.pdf",
@@ -542,7 +563,7 @@ def test_service_upload_leaves_no_orphan_files_when_uploads_or_extracted_is_syml
     assert legit_ext is not None and legit_ext.extracted_storage_key is not None
 
     # Now make extracted/{other_profile} or extracted_root fail during a second upload
-    other_profile = _create_profile(db_session, "Diego")
+    other_profile = _create_profile(db_session, "Diego", user_id=owner_id)
     bad_ext_dir = storage.extracted_root / str(other_profile.id)
     if not _try_windows_junction(bad_ext_dir, external_dir) and not _try_symlink(
         bad_ext_dir, external_dir, is_dir=True

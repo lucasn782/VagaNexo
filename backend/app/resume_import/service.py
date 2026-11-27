@@ -46,6 +46,7 @@ class ResumeImportService:
         session: Session,
         storage: ResumeStorage,
         *,
+        user_id: uuid.UUID,
         max_upload_bytes: int | None = None,
         max_archive_entries: int | None = None,
         max_uncompressed_bytes: int | None = None,
@@ -54,7 +55,8 @@ class ResumeImportService:
         settings = get_settings()
         self.session = session
         self.storage = storage
-        self.profiles = ProfileService(session)
+        self.user_id = user_id
+        self.profiles = ProfileService(session, user_id=user_id)
         self.max_upload_bytes = (
             max_upload_bytes if max_upload_bytes is not None else settings.max_resume_upload_bytes
         )
@@ -237,6 +239,7 @@ class ResumeImportService:
         except SQLAlchemyError as exc:
             self.session.rollback()
             raise StorageError("resume document could not be deleted") from exc
+        self.session.expire_all()
 
         for key in keys_to_delete:
             self._safe_delete(key)

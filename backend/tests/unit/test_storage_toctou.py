@@ -236,6 +236,7 @@ def test_toctou_d_concurrent_destination_file_never_overwritten_commit(
     target = storage.upload_root / str(profile_id) / f"{document_id}.pdf"
 
     orig_publish = storage._atomic_publish_no_overwrite
+    orig_link = storage_mod.os.link
 
     def race_before_publish(source: Path, dst: Path) -> None:
         # Simulate another worker creating the destination file after pre-check
@@ -243,7 +244,26 @@ def test_toctou_d_concurrent_destination_file_never_overwritten_commit(
         dst.write_bytes(b"concurrent-existing-content")
         orig_publish(source, dst)
 
+    def race_before_link(
+        src: str,
+        dst: str,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ) -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"concurrent-existing-content")
+        orig_link(
+            src,
+            dst,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+            follow_symlinks=follow_symlinks,
+        )
+
     monkeypatch.setattr(storage, "_atomic_publish_no_overwrite", race_before_publish)
+    monkeypatch.setattr(storage_mod.os, "link", race_before_link)
 
     with pytest.raises(StorageError):
         storage.commit(staged, profile_id=profile_id, document_id=document_id, extension=".pdf")
@@ -267,13 +287,33 @@ def test_toctou_d_concurrent_destination_file_never_overwritten_extracted(
     target = storage.extracted_root / str(profile_id) / f"{document_id}.txt"
 
     orig_publish = storage._atomic_publish_no_overwrite
+    orig_link = storage_mod.os.link
 
     def race_before_publish(source: Path, dst: Path) -> None:
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_text("existing-extracted-text", encoding="utf-8")
         orig_publish(source, dst)
 
+    def race_before_link(
+        src: str,
+        dst: str,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ) -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"existing-extracted-text")
+        orig_link(
+            src,
+            dst,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+            follow_symlinks=follow_symlinks,
+        )
+
     monkeypatch.setattr(storage, "_atomic_publish_no_overwrite", race_before_publish)
+    monkeypatch.setattr(storage_mod.os, "link", race_before_link)
 
     with pytest.raises(StorageError):
         storage.write_extracted_text(
@@ -426,7 +466,12 @@ def test_open_file_reads_regular_file_and_rejects_symlinks(
         pass
 
     target = storage.resolve(key)
-    monkeypatch.setattr(storage_mod, "_is_link_or_reparse_point", lambda p: p == target)
+    external = tmp_path / "outside.pdf"
+    external.write_bytes(b"%PDF-1.4 secret")
+    target.unlink()
+    if not _try_symlink(target, external, is_dir=False):
+        target.write_bytes(b"placeholder")
+        monkeypatch.setattr(storage_mod, "_is_link_or_reparse_point", lambda p: p == target)
     with pytest.raises(StorageError), storage.open_file(key):
         pass
 

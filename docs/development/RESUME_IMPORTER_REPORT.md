@@ -201,12 +201,14 @@ Detalhes das execuções:
 
 ## Segurança, autenticação e limites de implantação
 
-- **Ausência de autenticação e autorização multiusuário**: o Profile Engine e o Resume Importer ainda não implementam autenticação nem controle de acesso por usuário. Conhecer o UUID de um perfil permite acessar e operar suas rotas.
-- **Endpoints com dados pessoais**: rotas sob `/api/v1/profiles` e `/api/v1/profiles/{profile_id}/resume-documents` (incluindo `GET /{document_id}/extraction`, que retorna o texto integral do currículo) manipulam dados pessoais sensíveis.
-- **Exposição proibida e bloqueio de produção**: os endpoints de perfil e currículo **não devem ser expostos diretamente à internet**, e a implantação pública ou SaaS está **bloqueada** até a implementação formal de identidade, autenticação e autorização baseada em propriedade.
-- **Armazenamento privado vs. controle de acesso**: manter os arquivos fora de `frontend/` e sem rota estática pública impede acesso direto por URL de arquivo, mas não substitui autenticação na API.
-- **Próximos passos**: implementar autenticação/autorização multiusuário antes de qualquer exposição pública, além dos módulos futuros (OCR, AI Profile Analyzer e CV Engine).
+A camada de autenticação e controle de acesso multiusuário foi implementada na branch `feat/auth-multitenancy`. Consulte [`docs/architecture/AUTHENTICATION.md`](../architecture/AUTHENTICATION.md) para a arquitetura completa.
+
+- **Autenticação obrigatória**: todas as rotas de perfil e currículo exigem sessão ativa com cookie opaco (`vaganexo_session`), verificação de propriedade do perfil (`user_id`) e proteção CSRF/Origin em mutações.
+- **Isolamento multiusuário**: `ProfileService` e `ResumeImportService` filtram consultas por `user_id`; acesso a perfis de outros usuários retorna `404`.
+- **Endpoints com dados pessoais**: rotas sob `/api/v1/profiles` e `/api/v1/profiles/{profile_id}/resume-documents` manipulam dados pessoais sensíveis.
+- **Limites de produção**: os endpoints **não devem ser expostos à internet** sem proxy reverso TLS com `APP_ENV=production`. Não há cadastro público, verificação de e-mail, MFA ou SSO nesta etapa.
+- **Próximos passos**: módulos futuros (OCR, AI Profile Analyzer e CV Engine).
 
 ## Conclusão
 
-O **Resume Importer v1.0**, a **correção da infraestrutura de testes com Alembic** e as **correções de segurança e reversão de migração da revisão do PR #2** foram **concluídos** na branch `feat/resume-import`. O sistema permanece bloqueado para implantação pública até a implementação de autenticação e autorização multiusuário.
+O **Resume Importer v1.0**, a **correção da infraestrutura de testes com Alembic** e as **correções de segurança e reversão de migração da revisão do PR #2** foram **concluídos** na branch `feat/resume-import`. A autenticação e autorização multiusuário foram implementadas na branch `feat/auth-multitenancy` (consulte [`AUTHENTICATION.md`](../architecture/AUTHENTICATION.md)).
