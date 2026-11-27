@@ -33,9 +33,9 @@ Após a correção:
 | SHA base | `1f167d783e2ad6f65973e114cd24356b6a630e54` |
 | SHA original do head | `c3543a5db872c49968ad95ab1536c1ba621d3b94` |
 | SHA validado após correção | `10054ee8d4099eeb1a1d4a1fa16e37a512336277` |
-| Commits à frente da `main` | 4 |
-| Arquivos alterados | 41 |
-| Linhas | `+3344 / -105` |
+| Commits à frente da `main` | 4 (commit de código validado `10054ee`) |
+| Arquivos alterados (commit `10054ee`) | 41 |
+| Linhas (commit `10054ee`) | `+3344 / -105` |
 | Mergeable | `true` |
 | Mergeable state | `clean` |
 | Merge executado | Não |
