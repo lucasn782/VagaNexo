@@ -52,7 +52,7 @@ The task `app.workers.email_tasks.deliver_outbox_email` handles a dispatched mes
 | Check | Result | Evidence |
 |---|---|---|
 | Backend lifecycle/API/auth tests | PASS (earlier worktree snapshot) | Lifecycle API, existing auth API, and auth service tests: 17 passed before the final email URL/test updates. |
-| Full backend suite | PENDING | A full run previously exited 0, but final test edits were made afterward. The suite fixtures execute `TRUNCATE` and migration tests issue `DROP DATABASE`; rerunning would violate the explicit no-TRUNCATE/no-DROP instruction. |
+| Full backend suite | PASS | GitHub Actions CI run 16: 130 passed, 1 skipped (14.49s). The run used disposable CI PostgreSQL/Redis services. |
 | Ruff lint | PASS | `uv run ruff check app tests`. |
 | Ruff format | PASS | `uv run ruff format --check app tests`. |
 | Mypy | PASS | `uv run mypy app`: 80 source files, no issues. |
@@ -60,9 +60,9 @@ The task `app.workers.email_tasks.deliver_outbox_email` handles a dispatched mes
 | Next.js type generation | PASS | `npx next typegen` after final frontend changes. |
 | TypeScript | PASS | `npx tsc --noEmit` after final frontend changes. |
 | Production frontend build | PASS | `npm run build`; all six app routes generated after the fragment-based token change. |
-| Isolated migration upgrade/downgrade/re-upgrade | PENDING | Migration test was extended to cover legacy active/inactive accounts, profiles, sessions, and lifecycle revision rollback. It was not executed because its harness issues `DROP DATABASE`. |
-| CI | PENDING | Workflow now includes `feat/account-lifecycle-security`; CI runs after push/PR. |
-| Pull request | PENDING | To be opened against `main`, with no automatic merge. |
+| Isolated migration upgrade/downgrade/re-upgrade | PASS | Covered by the migration integration test in CI run 16, including existing profile ownership and session preservation. |
+| CI | PASS | Run 16 completed all 3 jobs successfully: Linux backend, Windows backend, and frontend. |
+| Pull request | PASS | [PR #5](https://github.com/lucasn782/VagaNexo/pull/5) is open against `main`; no automatic merge is enabled. |
 
 ## 9. Security audit summary
 
@@ -81,7 +81,7 @@ Changes cover backend lifecycle models, migration, token and outbox services, em
 
 ## 11. Commits and CI
 
-The architecture document was committed as `docs: add account lifecycle architecture` (`6c1137349f6ee993c654a08eed1470b004cfca8c`). Implementation is committed as `feat: add account lifecycle and email verification` (`b42bd5c`). This report and the refined fragment-token decision are committed separately. CI run IDs will be recorded after publication. No merge is planned.
+The architecture document was committed as `docs: add account lifecycle architecture` (`6c1137349f6ee993c654a08eed1470b004cfca8c`). Implementation is committed as `feat: add account lifecycle and email verification` (`b42bd5c`), with the migration assertion correction in `016779e`. This report and the refined fragment-token decision are committed separately. CI run 16 passed all jobs. No merge is planned.
 
 ## 12. Limitations and Phase 2
 
