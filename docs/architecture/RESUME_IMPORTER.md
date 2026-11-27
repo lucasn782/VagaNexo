@@ -153,14 +153,24 @@ Prefixo: `/api/v1/profiles/{profile_id}/resume-documents`
 - Nenhum conteúdo de currículo, dado pessoal ou caminho absoluto é registrado em logs ou exposto em erros ou respostas da API.
 - Os arquivos armazenados em `storage/` permanecem fora do diretório público e fora de `frontend/`, sem rota estática pública para servi-los.
 
-## 15. Segurança, autenticação e limites de implantação
+## 15. Autenticação, propriedade e limites de implantação
 
-- **Ausência de autenticação e autorização multiusuário**: o Profile Engine e o Resume Importer ainda não possuem autenticação nem autorização de usuários. Conhecer o UUID de um perfil é suficiente para operar suas rotas na API.
+A camada de autenticação e controle de acesso multiusuário foi implementada na branch `feat/auth-multitenancy`. Consulte [`AUTHENTICATION.md`](AUTHENTICATION.md) para a arquitetura completa.
+
+### Proteção das rotas de currículo
+
+- Todas as rotas sob `/api/v1/profiles/{profile_id}/resume-documents` exigem sessão ativa e verificação de propriedade do perfil (`require_owned_profile`).
+- Mutações (upload, exclusão, atualização) exigem adicionalmente validação CSRF (`X-CSRF-Token`) e validação estrita de `Origin`/`Referer`.
+- `ResumeImportService` exige `user_id` válido (`uuid.UUID`, falhando fechado caso ausente) e delega a verificação de propriedade ao `ProfileService`.
+- Acesso a documentos de perfis de outros usuários ou de perfis legados sem proprietário retorna `404 Not Found`.
+- Consulte [`SECURITY_AUDIT.md`](../development/SECURITY_AUDIT.md) para os resultados da auditoria de segurança.
+
+### Limites de implantação
+
 - **Endpoints com dados pessoais**: todos os endpoints sob `/api/v1/profiles/{profile_id}/resume-documents` (em especial `GET /{document_id}/extraction`, que retorna o texto integral do currículo) manipulam dados pessoais sensíveis.
-- **Exposição proibida na internet**: os endpoints de perfil e currículo **não devem ser expostos diretamente à internet**.
-- **Bloqueio de implantação pública/SaaS**: a implantação pública ou em modo SaaS está **bloqueada** até a implementação completa de autenticação e controle de acesso baseado em propriedade do perfil.
-- **Armazenamento privado não equivale a controle de acesso na API**: manter arquivos fora do frontend protege contra acesso estático direto, mas não substitui autenticação nas rotas REST.
+- **Exposição proibida na internet**: os endpoints de currículo **não devem ser expostos diretamente à internet** sem proxy reverso TLS com `APP_ENV=production`.
 - **Texto extraído como dado pessoal**: o texto extraído dos currículos é dado pessoal e deve receber criptografia, controle de acesso e governança adequados antes de qualquer ambiente de produção.
+- **Funcionalidades ausentes**: não há cadastro público, verificação de e-mail, recuperação de senha, MFA ou SSO nesta etapa.
 
 ## 16. Migração e reversão (Alembic)
 

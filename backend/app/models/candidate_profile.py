@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import CheckConstraint, Index, String, Text
+from sqlalchemy import CheckConstraint, ForeignKey, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
     from app.models.project import Project
     from app.models.resume_document import ResumeDocument
     from app.models.skill import Skill
+    from app.models.user import User
 
 
 class CandidateProfile(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -30,8 +32,13 @@ class CandidateProfile(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint("length(btrim(full_name)) > 0", name="full_name_not_blank"),
         Index("ix_candidate_profiles_full_name", "full_name"),
+        Index("ix_candidate_profiles_user_id", "user_id"),
     )
 
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     full_name: Mapped[str] = mapped_column(String(200), nullable=False)
     professional_headline: Mapped[str | None] = mapped_column(String(200), nullable=True)
     professional_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -44,6 +51,7 @@ class CandidateProfile(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     github_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     portfolio_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
+    user: Mapped[User | None] = relationship(back_populates="profiles")
     educations: Mapped[list[Education]] = relationship(
         back_populates="candidate_profile",
         cascade="all, delete-orphan",

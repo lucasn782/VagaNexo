@@ -14,6 +14,9 @@ from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 import app.models  # noqa: F401  (registers every table on Base.metadata)
+from app.auth.dependencies import get_rate_limiter
+from app.auth.rate_limit import InMemoryRateLimiter
+from app.auth.service import AuthService
 from app.core.config import get_settings
 from app.database.dependencies import get_db
 from app.main import app
@@ -31,6 +34,8 @@ PROFILE_TABLES = (
     "work_experiences",
     "educations",
     "candidate_profiles",
+    "auth_sessions",
+    "users",
 )
 
 
@@ -105,16 +110,33 @@ def db_session(test_engine: Engine) -> Iterator[Session]:
 
 
 @pytest.fixture()
-def client(db_session: Session) -> Iterator[TestClient]:
+def unauthenticated_client(db_session: Session) -> Iterator[TestClient]:
+    limiter = InMemoryRateLimiter(max_attempts=50, window_seconds=300)
+
     def override_get_db() -> Iterator[Session]:
         yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_rate_limiter] = lambda: limiter
     try:
         with TestClient(app) as test_client:
             yield test_client
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+def client(unauthenticated_client: TestClient, db_session: Session) -> Iterator[TestClient]:
+    auth_service = AuthService(db_session)
+    auth_service.create_user(email="default-test@example.com", password="TestPassword123!")
+    login_resp = unauthenticated_client.post(
+        "/api/v1/auth/login",
+        json={"email": "default-test@example.com", "password": "TestPassword123!"},
+    )
+    assert login_resp.status_code == 200, login_resp.text
+    csrf_token = login_resp.json()["csrf_token"]
+    unauthenticated_client.headers.update({"X-CSRF-Token": csrf_token})
+    yield unauthenticated_client
 
 
 @pytest.fixture()

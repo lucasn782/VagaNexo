@@ -40,6 +40,14 @@ class Settings(BaseSettings):
     max_resume_uncompressed_bytes: int = 50 * 1024 * 1024
     max_resume_text_characters: int = 2_000_000
 
+    # Authentication, opaque sessions, cookies, and rate limiting
+    auth_session_cookie_name: str = "vaganexo_session"
+    auth_session_ttl_seconds: int = 60 * 60 * 24 * 7  # 7 days
+    auth_cookie_secure: bool | None = None
+    auth_login_rate_limit_max_attempts: int = 5
+    auth_login_rate_limit_window_seconds: int = 300
+    auth_trusted_proxies: list[str] = []
+
     ai_provider: str = "openai-compatible"
     ai_base_url: str = "http://127.0.0.1:11434/v1"
     ai_model: str = "llama3.1"

@@ -12,7 +12,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
+from app.auth.dependencies import (
+    ActiveUserDep,
+    CSRFProtectedUserDep,
+    require_owned_profile,
+)
 from app.database.dependencies import get_db
+from app.models.candidate_profile import CandidateProfile
 from app.models.resume_document import ResumeDocument
 from app.models.resume_extraction import ResumeExtraction
 from app.profile.service import ProfileService
@@ -31,25 +37,47 @@ from app.schemas.resume_import import (
 )
 
 SessionDep = Annotated[Session, Depends(get_db)]
+OwnedProfileDep = Annotated[CandidateProfile, Depends(require_owned_profile)]
 
 
-def get_profile_service(session: SessionDep) -> ProfileService:
-    return ProfileService(session)
+def get_read_profile_service(
+    session: SessionDep,
+    current_user: ActiveUserDep,
+) -> ProfileService:
+    return ProfileService(session, user_id=current_user.id)
+
+
+def get_write_profile_service(
+    session: SessionDep,
+    current_user: CSRFProtectedUserDep,
+) -> ProfileService:
+    return ProfileService(session, user_id=current_user.id)
 
 
 def get_resume_storage() -> ResumeStorage:
     return ResumeStorage.from_settings()
 
 
-def get_resume_import_service(
+def get_read_resume_import_service(
     session: SessionDep,
+    current_user: ActiveUserDep,
     storage: Annotated[ResumeStorage, Depends(get_resume_storage)],
 ) -> ResumeImportService:
-    return ResumeImportService(session, storage)
+    return ResumeImportService(session, storage, user_id=current_user.id)
 
 
-ProfileServiceDep = Annotated[ProfileService, Depends(get_profile_service)]
-ImportServiceDep = Annotated[ResumeImportService, Depends(get_resume_import_service)]
+def get_write_resume_import_service(
+    session: SessionDep,
+    current_user: CSRFProtectedUserDep,
+    storage: Annotated[ResumeStorage, Depends(get_resume_storage)],
+) -> ResumeImportService:
+    return ResumeImportService(session, storage, user_id=current_user.id)
+
+
+ReadProfileServiceDep = Annotated[ProfileService, Depends(get_read_profile_service)]
+WriteProfileServiceDep = Annotated[ProfileService, Depends(get_write_profile_service)]
+ReadImportServiceDep = Annotated[ResumeImportService, Depends(get_read_resume_import_service)]
+WriteImportServiceDep = Annotated[ResumeImportService, Depends(get_write_resume_import_service)]
 
 router = APIRouter(prefix="/api/v1/profiles", tags=["resume-documents"])
 
@@ -87,7 +115,8 @@ def _upload_response(
 )
 def list_resume_documents(
     profile_id: uuid.UUID,
-    service: ProfileServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: ReadProfileServiceDep,
 ) -> list[ResumeDocument]:
     return service.list_resume_documents(profile_id)
 
@@ -101,7 +130,8 @@ def list_resume_documents(
 def create_resume_document(
     profile_id: uuid.UUID,
     payload: ResumeDocumentCreate,
-    service: ProfileServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: WriteProfileServiceDep,
 ) -> ResumeDocument:
     return service.create_resume_document(profile_id, payload)
 
@@ -115,7 +145,8 @@ def create_resume_document(
 def upload_resume_document(
     profile_id: uuid.UUID,
     file: Annotated[UploadFile, File(description="Resume file in PDF or DOCX format")],
-    service: ImportServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: WriteImportServiceDep,
 ) -> ResumeUploadResponse:
     document, extraction = service.upload(
         profile_id,
@@ -134,7 +165,8 @@ def upload_resume_document(
 def read_resume_document(
     profile_id: uuid.UUID,
     document_id: uuid.UUID,
-    service: ProfileServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: ReadProfileServiceDep,
 ) -> ResumeDocumentDetailResponse:
     document = service.get_resume_document(profile_id, document_id)
     return ResumeDocumentDetailResponse.model_validate(document)
@@ -148,7 +180,8 @@ def read_resume_document(
 def read_resume_extraction(
     profile_id: uuid.UUID,
     document_id: uuid.UUID,
-    service: ImportServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: ReadImportServiceDep,
 ) -> ResumeExtractionResponse:
     extraction = service.get_extraction(profile_id, document_id)
     return ResumeExtractionResponse.model_validate(extraction)
@@ -163,7 +196,8 @@ def update_resume_document(
     profile_id: uuid.UUID,
     document_id: uuid.UUID,
     payload: ResumeDocumentUpdate,
-    service: ProfileServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: WriteProfileServiceDep,
 ) -> ResumeDocument:
     return service.update_resume_document(profile_id, document_id, payload)
 
@@ -177,7 +211,8 @@ def update_resume_document(
 def delete_resume_document(
     profile_id: uuid.UUID,
     document_id: uuid.UUID,
-    service: ImportServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: WriteImportServiceDep,
 ) -> Response:
     service.delete_document(profile_id, document_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
