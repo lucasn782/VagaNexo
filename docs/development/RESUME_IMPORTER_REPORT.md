@@ -177,6 +177,28 @@ Detalhes das execuções:
 8. **Comportamento em Linux**: protegido adicionalmente por descritores fixados (`O_DIRECTORY | O_NOFOLLOW` e `dir_fd` em `os.open`/`os.replace`).
 9. **Limitações conhecidas (TOCTOU)**: no Windows, como `os.open` e `os.replace` não suportam `dir_fd`, permanece uma janela residual mínima entre a verificação prévia de reparse point e a chamada física ao sistema operacional. Em Linux, o uso de `dir_fd` com `O_DIRECTORY | O_NOFOLLOW` fecha a janela de troca de diretório.
 
+## Hardening TOCTOU: operações relativas a descritores
+
+1. **Problemas encontrados na implementação anterior**:
+   - `ensure_ready()`, `stage()`, `commit()`, `write_extracted_text()` e `delete_key()` ainda executavam validações prévias por caminho absoluto seguidas de novas chamadas por caminho (`Path.mkdir`, `Path.unlink`, `Path.is_file`), abrindo janelas TOCTOU entre checagem e uso.
+   - `commit()` e `write_extracted_text()` verificavam `target.exists()` antes de chamar `os.replace()`, que sobrescreve silenciosamente um arquivo criado concorrentemente no destino.
+   - `delete_key()` e `exists()` dependiam de `resolve()` retornando `Path` absoluto antes de `path.unlink()` / `is_file()`.
+2. **Estratégia implementada**:
+   - **Navegação por descritores fixados (POSIX)**: `_pin_dir()` fixa a raiz com `O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC` e valida `os.fstat()` (`S_ISDIR`); `_pin_child_dir()` navega componente por componente com `dir_fd`, criando subdiretórios ausentes com `os.mkdir(..., 0o700, dir_fd=...)` e reabrindo para validação.
+   - **Identidade de temporários e `stage()`**: `stage()` cria o `.part` (`0o600`) via `dir_fd` com `O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW` e registra `ino`/`dev` em `StagedUpload`; `commit()` valida o padrão `^[0-9a-f]{32}\.part$`, origem em `temporary/` e correspondência de inode/tamanho via `os.stat(..., dir_fd=..., follow_symlinks=False)`.
+   - **Publicação sem sobrescrita**: em POSIX, `commit()` e `write_extracted_text()` usam `os.link(..., src_dir_fd=..., dst_dir_fd=..., follow_symlinks=False)` (falha atomicamente com `FileExistsError` se o destino existir), `os.fsync` no arquivo e melhor esforço no diretório, seguido de `os.unlink(..., dir_fd=...)`. Em caso de interrupção abrupta entre `os.link` e `os.unlink`, um arquivo `.part` órfão pode permanecer em `temporary/` sem corromper o destino. No Windows, a publicação usa `os.rename()` (sem `MOVEFILE_REPLACE_EXISTING`) em vez de `os.replace()`, falhando com `FileExistsError` quando o destino já existe.
+   - **Exclusão e leitura seguras**: `delete_key()` valida chave canônica (UUID de perfil + `{uuid}.{pdf|docx|txt}` em `uploads/` ou `extracted/`), verifica `os.stat(..., dir_fd=..., follow_symlinks=False)` e executa `os.unlink(..., dir_fd=...)` + `os.rmdir(..., dir_fd=...)` em POSIX. Adicionado `open_file(storage_key)` com `O_NOFOLLOW` e `os.fstat()`.
+   - **`resolve()` e `relative_key()`**: documentados explicitamente como validação pontual no momento da chamada, não garantia permanente contra alterações posteriores no filesystem.
+3. **Limitações residuais no Windows**: como `os.open`, `os.mkdir`, `os.unlink`, `os.stat` e `os.rename` não suportam `dir_fd` no Windows, permanece uma janela TOCTOU residual entre a pré-validação de symlinks/junctions/reparse points e a chamada ao sistema operacional.
+4. **Testes e resultados reais**:
+   - Adicionado `backend/tests/unit/test_storage_toctou.py` cobrindo testes determinísticos A–J (simulação POSIX de `dir_fd` com verificação de fechamento de todos os descritores, publicação concorrente no destino para `commit()` e `write_extracted_text()`, symlink concorrente em `delete_key()`, `StagedUpload` manipulado, `open_file()`, e junction NTFS real via `mklink /J`).
+   - `uv run pytest -v --cov=app --cov-report=term-missing`: **110 passed, 1 skipped** (teste real POSIX `dir_fd` ignorado no Windows por ausência de suporte nativo), **84%** de cobertura total em `app` (incluindo integração e downgrade/re-upgrade Alembic em `vaganexo_migration_test`).
+   - `uv run ruff check .`: `All checks passed!`.
+   - `uv run ruff format --check .`: `80 files already formatted`.
+   - `uv run mypy app`: `Success: no issues found in 62 source files`.
+   - Teste ao vivo contra `vaganexo_test`: `LIVE_API_HARDENING_OK`.
+   - Frontend: não alterado nesta etapa (não reexecutado).
+
 ## Segurança, autenticação e limites de implantação
 
 - **Ausência de autenticação e autorização multiusuário**: o Profile Engine e o Resume Importer ainda não implementam autenticação nem controle de acesso por usuário. Conhecer o UUID de um perfil permite acessar e operar suas rotas.
