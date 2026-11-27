@@ -1,8 +1,8 @@
 """REST endpoints for the VagaNexo Profile Engine.
 
-Every route is scoped to a candidate profile. Records are always loaded with
-both the item id and the profile id, so an item from another profile is never
-returned or modified.
+Every route requires an authenticated user, enforces profile ownership via
+``require_owned_profile`` and user-scoped ``ProfileService`` queries, and
+validates CSRF + Origin on all state-changing requests.
 """
 
 from __future__ import annotations
@@ -13,6 +13,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy.orm import Session
 
+from app.auth.dependencies import (
+    ActiveUserDep,
+    CSRFProtectedUserDep,
+    require_owned_profile,
+)
 from app.database.dependencies import get_db
 from app.models.candidate_profile import CandidateProfile
 from app.models.certification import Certification
@@ -43,13 +48,25 @@ from app.schemas.project import ProjectCreate, ProjectResponse, ProjectUpdate
 from app.schemas.skill import SkillCreate, SkillResponse, SkillUpdate
 
 SessionDep = Annotated[Session, Depends(get_db)]
+OwnedProfileDep = Annotated[CandidateProfile, Depends(require_owned_profile)]
 
 
-def get_service(session: SessionDep) -> ProfileService:
-    return ProfileService(session)
+def get_read_service(
+    session: SessionDep,
+    current_user: ActiveUserDep,
+) -> ProfileService:
+    return ProfileService(session, user_id=current_user.id)
 
 
-ServiceDep = Annotated[ProfileService, Depends(get_service)]
+def get_write_service(
+    session: SessionDep,
+    current_user: CSRFProtectedUserDep,
+) -> ProfileService:
+    return ProfileService(session, user_id=current_user.id)
+
+
+ReadServiceDep = Annotated[ProfileService, Depends(get_read_service)]
+WriteServiceDep = Annotated[ProfileService, Depends(get_write_service)]
 
 router = APIRouter(prefix="/api/v1/profiles", tags=["profiles"])
 
@@ -57,15 +74,24 @@ router = APIRouter(prefix="/api/v1/profiles", tags=["profiles"])
 # ---------------------------------------------------------------------------
 # Candidate profile
 # ---------------------------------------------------------------------------
+@router.get(
+    "",
+    response_model=list[CandidateProfileResponse],
+    summary="List candidate profiles owned by the authenticated user",
+)
+def list_profiles(service: ReadServiceDep) -> list[CandidateProfile]:
+    return service.list_profiles()
+
+
 @router.post(
     "",
     response_model=CandidateProfileResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Create a candidate profile",
+    summary="Create a candidate profile for the authenticated user",
 )
 def create_profile(
     payload: CandidateProfileCreate,
-    service: ServiceDep,
+    service: WriteServiceDep,
 ) -> CandidateProfile:
     return service.create_profile(payload)
 
@@ -75,7 +101,11 @@ def create_profile(
     response_model=CandidateProfileResponse,
     summary="Get a candidate profile with all related records",
 )
-def read_profile(profile_id: uuid.UUID, service: ServiceDep) -> CandidateProfile:
+def read_profile(
+    profile_id: uuid.UUID,
+    _owned_profile: OwnedProfileDep,
+    service: ReadServiceDep,
+) -> CandidateProfile:
     return service.get_profile(profile_id)
 
 
@@ -87,7 +117,8 @@ def read_profile(profile_id: uuid.UUID, service: ServiceDep) -> CandidateProfile
 def update_profile(
     profile_id: uuid.UUID,
     payload: CandidateProfileUpdate,
-    service: ServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: WriteServiceDep,
 ) -> CandidateProfile:
     return service.update_profile(profile_id, payload)
 
@@ -100,7 +131,11 @@ def update_profile(
     response_model=list[EducationResponse],
     summary="List academic background records",
 )
-def list_educations(profile_id: uuid.UUID, service: ServiceDep) -> list[Education]:
+def list_educations(
+    profile_id: uuid.UUID,
+    _owned_profile: OwnedProfileDep,
+    service: ReadServiceDep,
+) -> list[Education]:
     return service.list_educations(profile_id)
 
 
@@ -113,7 +148,8 @@ def list_educations(profile_id: uuid.UUID, service: ServiceDep) -> list[Educatio
 def create_education(
     profile_id: uuid.UUID,
     payload: EducationCreate,
-    service: ServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: WriteServiceDep,
 ) -> Education:
     return service.create_education(profile_id, payload)
 
@@ -127,7 +163,8 @@ def update_education(
     profile_id: uuid.UUID,
     item_id: uuid.UUID,
     payload: EducationUpdate,
-    service: ServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: WriteServiceDep,
 ) -> Education:
     return service.update_education(profile_id, item_id, payload)
 
@@ -141,7 +178,8 @@ def update_education(
 def delete_education(
     profile_id: uuid.UUID,
     item_id: uuid.UUID,
-    service: ServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: WriteServiceDep,
 ) -> Response:
     service.delete_education(profile_id, item_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -157,7 +195,8 @@ def delete_education(
 )
 def list_experiences(
     profile_id: uuid.UUID,
-    service: ServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: ReadServiceDep,
 ) -> list[WorkExperience]:
     return service.list_experiences(profile_id)
 
@@ -171,7 +210,8 @@ def list_experiences(
 def create_experience(
     profile_id: uuid.UUID,
     payload: ExperienceCreate,
-    service: ServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: WriteServiceDep,
 ) -> WorkExperience:
     return service.create_experience(profile_id, payload)
 
@@ -185,7 +225,8 @@ def update_experience(
     profile_id: uuid.UUID,
     item_id: uuid.UUID,
     payload: ExperienceUpdate,
-    service: ServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: WriteServiceDep,
 ) -> WorkExperience:
     return service.update_experience(profile_id, item_id, payload)
 
@@ -199,7 +240,8 @@ def update_experience(
 def delete_experience(
     profile_id: uuid.UUID,
     item_id: uuid.UUID,
-    service: ServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: WriteServiceDep,
 ) -> Response:
     service.delete_experience(profile_id, item_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -213,7 +255,11 @@ def delete_experience(
     response_model=list[SkillResponse],
     summary="List skills",
 )
-def list_skills(profile_id: uuid.UUID, service: ServiceDep) -> list[Skill]:
+def list_skills(
+    profile_id: uuid.UUID,
+    _owned_profile: OwnedProfileDep,
+    service: ReadServiceDep,
+) -> list[Skill]:
     return service.list_skills(profile_id)
 
 
@@ -226,7 +272,8 @@ def list_skills(profile_id: uuid.UUID, service: ServiceDep) -> list[Skill]:
 def create_skill(
     profile_id: uuid.UUID,
     payload: SkillCreate,
-    service: ServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: WriteServiceDep,
 ) -> Skill:
     return service.create_skill(profile_id, payload)
 
@@ -240,7 +287,8 @@ def update_skill(
     profile_id: uuid.UUID,
     item_id: uuid.UUID,
     payload: SkillUpdate,
-    service: ServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: WriteServiceDep,
 ) -> Skill:
     return service.update_skill(profile_id, item_id, payload)
 
@@ -254,7 +302,8 @@ def update_skill(
 def delete_skill(
     profile_id: uuid.UUID,
     item_id: uuid.UUID,
-    service: ServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: WriteServiceDep,
 ) -> Response:
     service.delete_skill(profile_id, item_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -270,7 +319,8 @@ def delete_skill(
 )
 def list_certifications(
     profile_id: uuid.UUID,
-    service: ServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: ReadServiceDep,
 ) -> list[Certification]:
     return service.list_certifications(profile_id)
 
@@ -284,7 +334,8 @@ def list_certifications(
 def create_certification(
     profile_id: uuid.UUID,
     payload: CertificationCreate,
-    service: ServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: WriteServiceDep,
 ) -> Certification:
     return service.create_certification(profile_id, payload)
 
@@ -298,7 +349,8 @@ def update_certification(
     profile_id: uuid.UUID,
     item_id: uuid.UUID,
     payload: CertificationUpdate,
-    service: ServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: WriteServiceDep,
 ) -> Certification:
     return service.update_certification(profile_id, item_id, payload)
 
@@ -312,7 +364,8 @@ def update_certification(
 def delete_certification(
     profile_id: uuid.UUID,
     item_id: uuid.UUID,
-    service: ServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: WriteServiceDep,
 ) -> Response:
     service.delete_certification(profile_id, item_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -326,7 +379,11 @@ def delete_certification(
     response_model=list[LanguageResponse],
     summary="List languages",
 )
-def list_languages(profile_id: uuid.UUID, service: ServiceDep) -> list[Language]:
+def list_languages(
+    profile_id: uuid.UUID,
+    _owned_profile: OwnedProfileDep,
+    service: ReadServiceDep,
+) -> list[Language]:
     return service.list_languages(profile_id)
 
 
@@ -339,7 +396,8 @@ def list_languages(profile_id: uuid.UUID, service: ServiceDep) -> list[Language]
 def create_language(
     profile_id: uuid.UUID,
     payload: LanguageCreate,
-    service: ServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: WriteServiceDep,
 ) -> Language:
     return service.create_language(profile_id, payload)
 
@@ -353,7 +411,8 @@ def update_language(
     profile_id: uuid.UUID,
     item_id: uuid.UUID,
     payload: LanguageUpdate,
-    service: ServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: WriteServiceDep,
 ) -> Language:
     return service.update_language(profile_id, item_id, payload)
 
@@ -367,7 +426,8 @@ def update_language(
 def delete_language(
     profile_id: uuid.UUID,
     item_id: uuid.UUID,
-    service: ServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: WriteServiceDep,
 ) -> Response:
     service.delete_language(profile_id, item_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -381,7 +441,11 @@ def delete_language(
     response_model=list[ProjectResponse],
     summary="List projects",
 )
-def list_projects(profile_id: uuid.UUID, service: ServiceDep) -> list[Project]:
+def list_projects(
+    profile_id: uuid.UUID,
+    _owned_profile: OwnedProfileDep,
+    service: ReadServiceDep,
+) -> list[Project]:
     return service.list_projects(profile_id)
 
 
@@ -394,7 +458,8 @@ def list_projects(profile_id: uuid.UUID, service: ServiceDep) -> list[Project]:
 def create_project(
     profile_id: uuid.UUID,
     payload: ProjectCreate,
-    service: ServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: WriteServiceDep,
 ) -> Project:
     return service.create_project(profile_id, payload)
 
@@ -408,7 +473,8 @@ def update_project(
     profile_id: uuid.UUID,
     item_id: uuid.UUID,
     payload: ProjectUpdate,
-    service: ServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: WriteServiceDep,
 ) -> Project:
     return service.update_project(profile_id, item_id, payload)
 
@@ -422,7 +488,8 @@ def update_project(
 def delete_project(
     profile_id: uuid.UUID,
     item_id: uuid.UUID,
-    service: ServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: WriteServiceDep,
 ) -> Response:
     service.delete_project(profile_id, item_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -436,7 +503,11 @@ def delete_project(
     response_model=JobPreferencesResponse,
     summary="Get job preferences",
 )
-def read_preferences(profile_id: uuid.UUID, service: ServiceDep) -> JobPreferences:
+def read_preferences(
+    profile_id: uuid.UUID,
+    _owned_profile: OwnedProfileDep,
+    service: ReadServiceDep,
+) -> JobPreferences:
     return service.get_preferences(profile_id)
 
 
@@ -448,7 +519,8 @@ def read_preferences(profile_id: uuid.UUID, service: ServiceDep) -> JobPreferenc
 def upsert_preferences(
     profile_id: uuid.UUID,
     payload: JobPreferencesUpsert,
-    service: ServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: WriteServiceDep,
 ) -> JobPreferences:
     return service.upsert_preferences(profile_id, payload)
 
@@ -465,7 +537,8 @@ def confirm_record(
     profile_id: uuid.UUID,
     resource: ValidationResource,
     item_id: uuid.UUID,
-    service: ServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: WriteServiceDep,
 ) -> ValidationStatusResponse:
     item = service.set_validation_status(
         profile_id,
@@ -490,7 +563,8 @@ def reject_record(
     profile_id: uuid.UUID,
     resource: ValidationResource,
     item_id: uuid.UUID,
-    service: ServiceDep,
+    _owned_profile: OwnedProfileDep,
+    service: WriteServiceDep,
 ) -> ValidationStatusResponse:
     item = service.set_validation_status(
         profile_id,

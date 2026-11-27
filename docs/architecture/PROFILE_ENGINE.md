@@ -14,7 +14,7 @@ Esta versão entrega:
 - endpoints explícitos de confirmação e rejeição;
 - testes unitários e de integração.
 
-Não fazem parte desta fase: upload real de arquivos, extração de currículos, IA, embeddings, busca semântica, autenticação e multiusuário.
+Não fazem parte desta fase: upload real de arquivos, extração de currículos, IA, embeddings e busca semântica. A autenticação e o multiusuário foram adicionados pela branch `feat/auth-multitenancy` (consulte [`AUTHENTICATION.md`](AUTHENTICATION.md)).
 
 ## 2. Arquitetura
 
@@ -59,7 +59,7 @@ Responsabilidades:
 | `database/` | Engine, sessão e ciclo de vida da conexão |
 | `main.py` | Registro das rotas, CORS e tratamento padronizado de erros |
 
-A lógica de negócio não depende de FastAPI. As rotas apenas delegam ao `ProfileService`, o que preserva a separação necessária para adicionar autenticação e multiusuário no futuro.
+A lógica de negócio não depende de FastAPI. As rotas apenas delegam ao `ProfileService`, o que preservou a separação necessária para adicionar autenticação e multiusuário. A camada de identidade e controle de acesso foi implementada na branch `feat/auth-multitenancy` (consulte [`AUTHENTICATION.md`](AUTHENTICATION.md)).
 
 ## 3. Modelo de dados
 
@@ -555,17 +555,36 @@ $env:TEST_DATABASE_URL = "postgresql+psycopg://usuario:senha@127.0.0.1:5433/vaga
 
 ## 13. Decisões e limites desta fase
 
-- Sem autenticação: o MVP é local e individual. O escopo por perfil já está aplicado em todas as consultas, o que prepara a futura camada de autorização.
+- Autenticação e multiusuário foram implementados na branch `feat/auth-multitenancy` (sessões opacas, Argon2id, CSRF, propriedade de perfis). Consulte [`AUTHENTICATION.md`](AUTHENTICATION.md).
 - Sem upload: apenas metadados de documentos são registrados.
 - Sem IA: nenhuma sugestão é gerada; o modelo apenas suporta a proveniência e a confirmação.
 - Sem exclusão de perfil via API: a integridade de exclusão já é garantida no banco e testada.
 - CORS configurado por `CORS_ORIGINS`, com padrão para o frontend local em `http://127.0.0.1:3000` e `http://localhost:3000`.
 
-## 14. Segurança, autenticação e limites de implantação
+## 14. Autenticação, propriedade e limites de implantação
 
-- **Ausência de autenticação e autorização multiusuário**: o sistema ainda não possui autenticação nem controle de acesso por usuário. Qualquer chamada HTTP que conheça o `profile_id` (UUID) consegue consultar, alterar ou excluir recursos associados àquele perfil.
-- **Endpoints com dados pessoais**: as rotas sob `/api/v1/profiles` e `/api/v1/profiles/{profile_id}/resume-documents` expõem dados pessoais do candidato (nome, e-mail, telefone, histórico profissional, currículo e texto extraído).
-- **Restrição de exposição**: os endpoints de perfil e currículo **não devem ser expostos diretamente à internet**.
-- **Bloqueio de implantação pública/SaaS**: a implantação pública ou SaaS está **bloqueada** até a implementação formal de identidade, autenticação e autorização com verificação de propriedade do perfil.
-- **Armazenamento físico vs. controle de acesso**: o armazenamento privado em disco fora do frontend não substitui controle de acesso na API.
-- **Dados pessoais**: o texto extraído e os dados cadastrais dos currículos constituem dado pessoal e exigem proteção compatível antes de uso em produção.
+A camada de autenticação e controle de acesso multiusuário foi implementada na branch `feat/auth-multitenancy`. Consulte [`AUTHENTICATION.md`](AUTHENTICATION.md) para a arquitetura completa.
+
+### Propriedade dos perfis
+
+- `candidate_profiles.user_id` (FK → `users.id`, `ON DELETE SET NULL`, indexado) identifica o proprietário do perfil.
+- `ProfileService` recebe `user_id` no construtor e filtra todas as consultas por `CandidateProfile.user_id == self.user_id`.
+- Perfis de outros usuários ou perfis legados sem proprietário retornam `404 Not Found` (sem revelar existência).
+- O cliente não pode fornecer `user_id` nos payloads (`extra="forbid"` nos schemas Pydantic); o servidor associa `current_user.id` automaticamente.
+
+### Proteção das rotas
+
+- Todas as rotas sob `/api/v1/profiles` exigem sessão ativa (`get_current_active_user`) e verificação de propriedade (`require_owned_profile`).
+- Mutações (`POST`, `PUT`, `PATCH`, `DELETE`) exigem adicionalmente validação CSRF (`X-CSRF-Token`) e validação de `Origin`.
+- `GET /api/v1/profiles` lista apenas os perfis pertencentes ao usuário autenticado.
+
+### Dados legados
+
+- Perfis anteriores à migração de autenticação mantêm `user_id IS NULL` e permanecem inacessíveis pelas APIs até atribuição explícita via CLI local (`python -m app.cli claim-profile`).
+
+### Limites de implantação
+
+- **Endpoints com dados pessoais**: as rotas sob `/api/v1/profiles` expõem dados pessoais do candidato (nome, e-mail, telefone, histórico profissional).
+- **Restrição de exposição**: os endpoints de perfil **não devem ser expostos diretamente à internet** sem proxy reverso TLS com `APP_ENV=production`.
+- **Dados pessoais**: os dados cadastrais dos currículos constituem dado pessoal e exigem proteção compatível antes de uso em produção.
+- **Funcionalidades ausentes**: não há cadastro público, verificação de e-mail, recuperação de senha, MFA ou SSO nesta etapa.

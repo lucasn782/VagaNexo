@@ -63,10 +63,11 @@ REQUIRED_FIELDS: dict[type[Base], tuple[str, ...]] = {
 
 
 class ProfileService:
-    """Profile aggregate service bound to a single SQLAlchemy session."""
+    """Profile aggregate service bound to a single SQLAlchemy session and user."""
 
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, *, user_id: uuid.UUID) -> None:
         self.session = session
+        self.user_id = user_id
 
     # ------------------------------------------------------------------
     # Persistence helpers
@@ -80,12 +81,16 @@ class ProfileService:
 
     def _ensure_profile(self, profile_id: uuid.UUID) -> None:
         exists = self.session.scalar(
-            select(CandidateProfile.id).where(CandidateProfile.id == profile_id)
+            select(CandidateProfile.id).where(
+                CandidateProfile.id == profile_id,
+                CandidateProfile.user_id == self.user_id,
+            )
         )
         if exists is None:
             raise ProfileNotFoundError("profile not found")
 
     def _get_child(self, profile_id: uuid.UUID, model: Any, item_id: uuid.UUID) -> Any:
+        self._ensure_profile(profile_id)
         item = self.session.scalar(
             select(model).where(model.id == item_id, model.candidate_profile_id == profile_id)
         )
@@ -207,8 +212,27 @@ class ProfileService:
     # ------------------------------------------------------------------
     # Candidate profile
     # ------------------------------------------------------------------
+    def list_profiles(self) -> list[CandidateProfile]:
+        return list(
+            self.session.scalars(
+                select(CandidateProfile)
+                .where(CandidateProfile.user_id == self.user_id)
+                .options(
+                    selectinload(CandidateProfile.educations),
+                    selectinload(CandidateProfile.experiences),
+                    selectinload(CandidateProfile.skills),
+                    selectinload(CandidateProfile.certifications),
+                    selectinload(CandidateProfile.languages),
+                    selectinload(CandidateProfile.projects),
+                    selectinload(CandidateProfile.preferences),
+                    selectinload(CandidateProfile.resume_documents),
+                )
+                .order_by(CandidateProfile.created_at.asc())
+            )
+        )
+
     def create_profile(self, payload: CandidateProfileCreate) -> CandidateProfile:
-        profile = CandidateProfile(**payload.model_dump())
+        profile = CandidateProfile(user_id=self.user_id, **payload.model_dump())
         self.session.add(profile)
         self._commit("candidate profile could not be created")
         return self.get_profile(profile.id)
@@ -216,7 +240,10 @@ class ProfileService:
     def get_profile(self, profile_id: uuid.UUID) -> CandidateProfile:
         profile = self.session.scalar(
             select(CandidateProfile)
-            .where(CandidateProfile.id == profile_id)
+            .where(
+                CandidateProfile.id == profile_id,
+                CandidateProfile.user_id == self.user_id,
+            )
             .options(
                 selectinload(CandidateProfile.educations),
                 selectinload(CandidateProfile.experiences),

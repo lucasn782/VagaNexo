@@ -7,9 +7,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from app.api.routes.auth import router as auth_router
 from app.api.routes.health import router as health_router
 from app.api.routes.profiles import router as profiles_router
 from app.api.routes.resume_documents import router as resume_documents_router
+from app.auth.exceptions import AuthError
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.profile.exceptions import ProfileEngineError
@@ -38,12 +40,20 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=settings.cors_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type", "X-CSRF-Token", "Accept"],
     )
     application.include_router(health_router)
+    application.include_router(auth_router)
     application.include_router(profiles_router)
     application.include_router(resume_documents_router)
+
+    @application.exception_handler(AuthError)
+    async def handle_auth_error(
+        _request: Request,
+        exc: AuthError,
+    ) -> JSONResponse:
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
     @application.exception_handler(ProfileEngineError)
     async def handle_profile_error(

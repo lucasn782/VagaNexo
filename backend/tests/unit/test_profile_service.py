@@ -6,6 +6,7 @@ from datetime import date
 import pytest
 from sqlalchemy.orm import Session
 
+from app.auth.service import AuthService
 from app.models.enums import SourceType, ValidationResource, ValidationStatus
 from app.profile.exceptions import (
     ConflictError,
@@ -25,7 +26,11 @@ from app.schemas.skill import SkillCreate
 
 
 def make_service(db_session: Session) -> ProfileService:
-    return ProfileService(db_session)
+    user = AuthService(db_session).create_user(
+        email=f"user-{uuid.uuid4().hex[:8]}@example.com",
+        password="TestPassword123!",
+    )
+    return ProfileService(db_session, user_id=user.id)
 
 
 def make_profile(service: ProfileService) -> uuid.UUID:
