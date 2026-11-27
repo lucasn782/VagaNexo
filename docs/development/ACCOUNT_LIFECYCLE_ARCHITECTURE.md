@@ -180,6 +180,7 @@ Atualmente não existe infraestrutura de e-mail no repositório.
    - **Nunca** persistir tokens brutos na `email_outbox` indefinidamente: armazenar o template + contexto mínimo ou payload criptografado/limpar o corpo após entrega (`sent_at`), e **nunca** registrar links com token ou endereços completos em logs de aplicação.
 3. **Resiliência Celery:** `acks_late=True`, `max_retries=5` com *exponential backoff*, `soft_time_limit=15s`, `time_limit=30s`, e atualização de status (`pending`, `sending`, `sent`, `failed`, `attempts`, `last_error` sanitizado).
 4. **URLs confiáveis:** links construídos exclusivamente a partir de `APP_PUBLIC_BASE_URL` configurada no servidor (nunca usando cabeçalho `Host` da requisição para evitar *Host Header Injection*).
+5. **Token no navegador:** o link usa o fragmento (`/verify-email#token=...`), que não é enviado na requisição HTTP ao frontend nem aparece em logs de acesso do servidor. A página move o token para memória e limpa a barra de endereço; somente uma ação explícita do usuário envia o token ao endpoint POST.
 
 ---
 
