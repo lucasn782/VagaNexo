@@ -68,6 +68,14 @@ def verify_password(password_hash: str, password: str) -> bool:
         return False
 
 
+def needs_rehash(password_hash: str) -> bool:
+    """Return True if an Argon2id hash should be upgraded to current parameters."""
+    try:
+        return _PASSWORD_HASHER.check_needs_rehash(password_hash)
+    except InvalidHashError:
+        return False
+
+
 def dummy_verify_password(password: str) -> None:
     """Perform a constant-time dummy Argon2id check when an account does not exist."""
     verify_password(_DUMMY_PASSWORD_HASH, password or "dummy")

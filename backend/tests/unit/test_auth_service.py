@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from redis.exceptions import RedisError
@@ -21,7 +22,10 @@ from app.auth.service import AuthService
 from app.cli import run_cli
 from app.core.config import Settings
 from app.models.candidate_profile import CandidateProfile
-from app.profile.exceptions import ConflictError
+from app.profile.exceptions import ConflictError, InvalidProfileDataError
+from app.profile.service import ProfileService
+from app.resume_import.service import ResumeImportService
+from app.resume_import.storage import ResumeStorage
 
 
 def test_normalize_email_and_validation() -> None:
@@ -222,3 +226,39 @@ def test_cli_create_user_and_claim_profile(db_session: Session) -> None:
         )
         == 1
     )
+
+
+def test_profile_and_resume_services_fail_closed_on_missing_user_id(
+    db_session: Session,
+    tmp_path: Path,
+) -> None:
+    legacy_profile = CandidateProfile(full_name="Unowned Legacy")
+    db_session.add(legacy_profile)
+    db_session.commit()
+
+    with pytest.raises(InvalidProfileDataError):
+        ProfileService(db_session, user_id=None)  # type: ignore[arg-type]
+
+    storage = ResumeStorage.from_settings(Settings(storage_root=tmp_path))
+    with pytest.raises(InvalidProfileDataError):
+        ResumeImportService(db_session, storage, user_id=None)  # type: ignore[arg-type]
+
+
+def test_authenticate_rehashes_password_when_needed(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    limiter = InMemoryRateLimiter(max_attempts=10, window_seconds=60)
+    service = AuthService(db_session, rate_limiter=limiter)
+    user = service.create_user(email="rehash@example.com", password="RehashPassword123!")
+    original_hash = user.password_hash
+
+    monkeypatch.setattr("app.auth.service.needs_rehash", lambda _h: True)
+    service.authenticate(
+        email="rehash@example.com",
+        password="RehashPassword123!",
+        client_ip="127.0.0.1",
+    )
+    db_session.refresh(user)
+    assert user.password_hash != original_hash
+    assert verify_password(user.password_hash, "RehashPassword123!")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from fastapi import Depends, Request
 from sqlalchemy import select
@@ -42,12 +43,25 @@ AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]
 
 
 def validate_origin(request: Request, settings: Settings | None = None) -> None:
-    """Reject requests whose Origin header is outside the configured allowlist."""
-    origin = request.headers.get("origin")
-    if not origin:
-        return
+    """Reject requests whose Origin or Referer is outside the configured allowlist."""
     current = settings or get_settings()
-    if origin not in current.cors_origins:
+    origin = request.headers.get("origin")
+    if origin is not None:
+        if origin not in current.cors_origins:
+            raise OriginNotAllowedError()
+        return
+
+    referer = request.headers.get("referer")
+    if referer is not None:
+        parsed = urlsplit(referer)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise OriginNotAllowedError()
+        referer_origin = f"{parsed.scheme}://{parsed.netloc}"
+        if referer_origin not in current.cors_origins:
+            raise OriginNotAllowedError()
+        return
+
+    if current.app_env == "production":
         raise OriginNotAllowedError()
 
 

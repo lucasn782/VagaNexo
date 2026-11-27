@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     auth_cookie_secure: bool | None = None
     auth_login_rate_limit_max_attempts: int = 5
     auth_login_rate_limit_window_seconds: int = 300
+    auth_trusted_proxies: list[str] = []
 
     ai_provider: str = "openai-compatible"
     ai_base_url: str = "http://127.0.0.1:11434/v1"

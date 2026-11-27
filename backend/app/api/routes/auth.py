@@ -49,8 +49,21 @@ def _clear_session_cookie(response: Response, settings: Settings) -> None:
     )
 
 
-def _client_ip(request: Request) -> str:
-    return request.client.host if request.client is not None else "unknown"
+def _client_ip(request: Request, settings: Settings | None = None) -> str:
+    peer_ip = request.client.host if request.client is not None else "unknown"
+    current = settings or get_settings()
+    if peer_ip in current.auth_trusted_proxies:
+        forwarded_for = request.headers.get("x-forwarded-for")
+        if forwarded_for:
+            # Use the rightmost untrusted hop appended by the trusted proxy.
+            hops = [hop.strip() for hop in forwarded_for.split(",") if hop.strip()]
+            for hop in reversed(hops):
+                if hop not in current.auth_trusted_proxies:
+                    return hop
+        real_ip = request.headers.get("x-real-ip")
+        if real_ip and real_ip.strip():
+            return real_ip.strip()
+    return peer_ip
 
 
 @router.post(
@@ -114,9 +127,11 @@ def read_me(current_user: ActiveUserDep) -> UserPublicResponse:
     summary="Issue or rotate the CSRF token for the active session",
 )
 def read_csrf(
+    request: Request,
     session_and_user: Annotated[tuple[AuthSession, User], Depends(get_current_session_and_user)],
     auth_service: AuthServiceDep,
 ) -> CSRFResponse:
+    validate_origin(request)
     auth_session, _ = session_and_user
     csrf_token = auth_service.issue_csrf_token(auth_session)
     return CSRFResponse(csrf_token=csrf_token)

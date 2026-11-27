@@ -6,7 +6,7 @@ import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -23,6 +23,7 @@ from app.auth.security import (
     generate_session_token,
     hash_password,
     hash_token,
+    needs_rehash,
     normalize_email,
     verify_password,
 )
@@ -110,6 +111,9 @@ class AuthService:
         if not user.is_active:
             raise InvalidCredentialsError()
 
+        if needs_rehash(user.password_hash):
+            user.password_hash = hash_password(password)
+
         raw_session_token = generate_session_token()
         raw_csrf_token = generate_csrf_token()
         now = _utcnow()
@@ -170,17 +174,29 @@ class AuthService:
         if user is None:
             raise InvalidUserDataError("target user account does not exist")
 
+        result = self.session.execute(
+            update(CandidateProfile)
+            .where(
+                CandidateProfile.id == profile_id,
+                CandidateProfile.user_id.is_(None),
+            )
+            .values(user_id=user.id)
+            .returning(CandidateProfile.id)
+        )
+        updated_id = result.scalar_one_or_none()
+        if updated_id is None:
+            self.session.rollback()
+            exists = self.session.scalar(
+                select(CandidateProfile.id).where(CandidateProfile.id == profile_id)
+            )
+            if exists is None:
+                raise ProfileNotFoundError("profile not found")
+            raise ConflictError("profile already has an assigned owner")
+
+        self.session.commit()
         profile = self.session.scalar(
             select(CandidateProfile).where(CandidateProfile.id == profile_id)
         )
-        if profile is None:
-            raise ProfileNotFoundError("profile not found")
-
-        if profile.user_id is not None:
-            raise ConflictError("profile already has an assigned owner")
-
-        profile.user_id = user.id
-        self.session.commit()
-        self.session.refresh(profile)
+        assert profile is not None
         logger.info("Assigned legacy profile %s to user %s", profile.id, user.id)
         return profile

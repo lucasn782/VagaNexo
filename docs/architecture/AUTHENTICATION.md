@@ -16,9 +16,10 @@
 ## 3. Cookies, CSRF e CORS
 
 - Cookie opaco: `vaganexo_session` (`HttpOnly`, `SameSite=Lax`, `Path=/`, sem `Domain`; `Secure` obrigatório quando `APP_ENV=production` ou `AUTH_COOKIE_SECURE=true`).
-- Todas as operações de alteração de estado (`POST`, `PUT`, `PATCH`, `DELETE`) exigem cabeçalho `X-CSRF-Token` validado por `hmac.compare_digest` contra `csrf_token_hash`, além de validação do cabeçalho `Origin` contra `CORS_ORIGINS`.
+- Todas as operações de alteração de estado (`POST`, `PUT`, `PATCH`, `DELETE`) exigem cabeçalho `X-CSRF-Token` validado por `hmac.compare_digest` contra `csrf_token_hash`, além de validação estrita de `Origin` (e `Referer` quando `Origin` estiver ausente) contra `CORS_ORIGINS`. Em `APP_ENV=production`, requisições sem `Origin` e sem `Referer` falham fechadas (`403`).
+- `GET /api/v1/auth/csrf` também valida `Origin`/`Referer` antes de rotacionar o token CSRF da sessão.
 - `CORSMiddleware` configurado com `allow_credentials=True` apenas para `CORS_ORIGINS`, métodos explícitos (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`) e cabeçalhos explícitos (`Content-Type`, `X-CSRF-Token`, `Accept`).
-- No frontend Next.js, requisições usam `credentials: "include"` e o token CSRF é mantido exclusivamente em memória (nunca em `localStorage` ou `sessionStorage`).
+- No frontend Next.js, requisições usam `credentials: "include"`, o token CSRF é mantido exclusivamente em memória e chamadas simultâneas a `/csrf` são deduplicadas para evitar condição de corrida entre requisições concorrentes.
 
 ## 4. Rate limiting
 
@@ -44,6 +45,7 @@
 - `AUTH_COOKIE_SECURE` (opcional; padrão `true` em `production`)
 - `AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS` (padrão `5`)
 - `AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS` (padrão `300`)
+- `AUTH_TRUSTED_PROXIES` (padrão `[]`; cabeçalhos `X-Forwarded-For`/`X-Real-IP` só são considerados quando o peer direto pertence a essa lista)
 
 Provisionamento local:
 

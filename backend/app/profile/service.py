@@ -66,6 +66,8 @@ class ProfileService:
     """Profile aggregate service bound to a single SQLAlchemy session and user."""
 
     def __init__(self, session: Session, *, user_id: uuid.UUID) -> None:
+        if not isinstance(user_id, uuid.UUID):
+            raise InvalidProfileDataError("authenticated user_id must be a valid UUID")
         self.session = session
         self.user_id = user_id
 
@@ -83,6 +85,7 @@ class ProfileService:
         exists = self.session.scalar(
             select(CandidateProfile.id).where(
                 CandidateProfile.id == profile_id,
+                CandidateProfile.user_id.is_not(None),
                 CandidateProfile.user_id == self.user_id,
             )
         )
@@ -216,7 +219,10 @@ class ProfileService:
         return list(
             self.session.scalars(
                 select(CandidateProfile)
-                .where(CandidateProfile.user_id == self.user_id)
+                .where(
+                    CandidateProfile.user_id.is_not(None),
+                    CandidateProfile.user_id == self.user_id,
+                )
                 .options(
                     selectinload(CandidateProfile.educations),
                     selectinload(CandidateProfile.experiences),

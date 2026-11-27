@@ -160,9 +160,10 @@ A camada de autenticação e controle de acesso multiusuário foi implementada n
 ### Proteção das rotas de currículo
 
 - Todas as rotas sob `/api/v1/profiles/{profile_id}/resume-documents` exigem sessão ativa e verificação de propriedade do perfil (`require_owned_profile`).
-- Mutações (upload, exclusão, atualização) exigem adicionalmente validação CSRF (`X-CSRF-Token`) e validação de `Origin`.
-- `ResumeImportService` recebe `user_id` no construtor e delega a verificação de propriedade ao `ProfileService`.
+- Mutações (upload, exclusão, atualização) exigem adicionalmente validação CSRF (`X-CSRF-Token`) e validação estrita de `Origin`/`Referer`.
+- `ResumeImportService` exige `user_id` válido (`uuid.UUID`, falhando fechado caso ausente) e delega a verificação de propriedade ao `ProfileService`.
 - Acesso a documentos de perfis de outros usuários ou de perfis legados sem proprietário retorna `404 Not Found`.
+- Consulte [`SECURITY_AUDIT.md`](../development/SECURITY_AUDIT.md) para os resultados da auditoria de segurança.
 
 ### Limites de implantação
 

@@ -24,31 +24,44 @@ export class ApiError extends Error {
 
 // Kept exclusively in memory; never persisted in localStorage or sessionStorage.
 let inMemoryCsrfToken: string | null = null;
+let inFlightCsrfPromise: Promise<string> | null = null;
 
 export function clearInMemoryCsrfToken(): void {
   inMemoryCsrfToken = null;
+  inFlightCsrfPromise = null;
 }
 
 async function ensureCsrfToken(): Promise<string> {
   if (inMemoryCsrfToken) {
     return inMemoryCsrfToken;
   }
-  const response = await fetch(`${API_BASE_URL}/api/v1/auth/csrf`, {
-    method: "GET",
-    credentials: "include",
-    headers: { Accept: "application/json" },
-  });
-  if (!response.ok) {
-    throw new ApiError(response.status, "Unable to obtain CSRF token");
+  if (inFlightCsrfPromise) {
+    return inFlightCsrfPromise;
   }
-  const data = (await response.json()) as { csrf_token: string };
-  inMemoryCsrfToken = data.csrf_token;
-  return inMemoryCsrfToken;
+  inFlightCsrfPromise = (async () => {
+    const response = await fetch(`${API_BASE_URL}/api/v1/auth/csrf`, {
+      method: "GET",
+      credentials: "include",
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) {
+      throw new ApiError(response.status, "Unable to obtain CSRF token");
+    }
+    const data = (await response.json()) as { csrf_token: string };
+    inMemoryCsrfToken = data.csrf_token;
+    return data.csrf_token;
+  })();
+  try {
+    return await inFlightCsrfPromise;
+  } finally {
+    inFlightCsrfPromise = null;
+  }
 }
 
 export async function apiRequest<T>(
   path: string,
   options: RequestInit = {},
+  _csrfRetried = false,
 ): Promise<T> {
   const method = (options.method ?? "GET").toUpperCase();
   const isStateChanging = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
@@ -84,6 +97,16 @@ export async function apiRequest<T>(
       }
     } catch {
       // ignore non-JSON error bodies
+    }
+    if (
+      response.status === 403 &&
+      detail === "CSRF validation failed" &&
+      isStateChanging &&
+      path !== "/api/v1/auth/login" &&
+      !_csrfRetried
+    ) {
+      clearInMemoryCsrfToken();
+      return apiRequest<T>(path, options, true);
     }
     throw new ApiError(response.status, detail);
   }

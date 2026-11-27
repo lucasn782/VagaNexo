@@ -207,3 +207,67 @@ def test_cors_and_rate_limiting_enforced(
         json={"email": "rl@example.com", "password": "wrong"},
     )
     assert blocked.status_code == 429
+
+
+def test_origin_null_empty_malformed_referer_and_production_fail_closed(
+    unauthenticated_client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    AuthService(db_session).create_user(
+        email="origin@example.com",
+        password="OriginPassword123!",
+    )
+
+    for bad_headers in (
+        {"Origin": "null"},
+        {"Origin": ""},
+        {"Origin": "not-a-url"},
+        {"Referer": "https://evil.example.com/phish"},
+        {"Referer": "javascript:alert(1)"},
+    ):
+        resp = unauthenticated_client.post(
+            "/api/v1/auth/login",
+            json={"email": "origin@example.com", "password": "OriginPassword123!"},
+            headers=bad_headers,
+        )
+        assert resp.status_code == 403, f"Expected 403 for {bad_headers}, got {resp.status_code}"
+
+    # In production, missing both Origin and Referer fails closed
+    prod_settings = get_settings().model_copy(update={"app_env": "production"})
+    monkeypatch.setattr("app.auth.dependencies.get_settings", lambda: prod_settings)
+    no_origin_prod = unauthenticated_client.post(
+        "/api/v1/auth/login",
+        json={"email": "origin@example.com", "password": "OriginPassword123!"},
+    )
+    assert no_origin_prod.status_code == 403
+
+
+def test_ip_rate_limit_cannot_be_bypassed_by_spoofed_forwarding_headers(
+    unauthenticated_client: TestClient,
+) -> None:
+    strict_limiter = InMemoryRateLimiter(max_attempts=2, window_seconds=300)
+    app.dependency_overrides[get_rate_limiter] = lambda: strict_limiter
+
+    for idx in range(2):
+        r = unauthenticated_client.post(
+            "/api/v1/auth/login",
+            json={"email": f"spoof{idx}@example.com", "password": "wrong"},
+            headers={
+                "X-Forwarded-For": f"203.0.113.{idx + 1}",
+                "X-Real-IP": f"198.51.100.{idx + 1}",
+                "Forwarded": f"for=192.0.2.{idx + 1}",
+            },
+        )
+        assert r.status_code == 401
+
+    blocked = unauthenticated_client.post(
+        "/api/v1/auth/login",
+        json={"email": "spoof99@example.com", "password": "wrong"},
+        headers={
+            "X-Forwarded-For": "203.0.113.99",
+            "X-Real-IP": "198.51.100.99",
+            "Forwarded": "for=192.0.2.99",
+        },
+    )
+    assert blocked.status_code == 429
