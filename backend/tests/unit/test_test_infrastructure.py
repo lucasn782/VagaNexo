@@ -12,18 +12,24 @@ from tests.conftest import PROFILE_TABLES, _test_database_url
 from app.models.candidate_profile import CandidateProfile
 
 
-def test_database_url_requires_test_suffix(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_database_url_requires_exact_test_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(
         "TEST_DATABASE_URL", "postgresql+psycopg://user:pass@127.0.0.1:5433/vaganexo"
     )
-    with pytest.raises(RuntimeError, match="_test"):
+    with pytest.raises(RuntimeError, match="allowlist"):
+        _test_database_url()
+    monkeypatch.setenv(
+        "TEST_DATABASE_URL", "postgresql+psycopg://user:pass@127.0.0.1:5433/some_other_test"
+    )
+    with pytest.raises(RuntimeError, match="allowlist"):
         _test_database_url()
 
 
 def test_engine_targets_test_database_only(test_engine: Engine) -> None:
     assert test_engine.url.database is not None
-    assert test_engine.url.database.endswith("_test")
-    assert test_engine.url.database != "vaganexo"
+    assert test_engine.url.database == "vaganexo_test"
+    with test_engine.connect() as connection:
+        assert connection.execute(text("SELECT current_database()")).scalar_one() == "vaganexo_test"
 
 
 def test_alembic_migrations_applied_and_all_tables_exist(test_engine: Engine) -> None:

@@ -58,6 +58,26 @@ class LanguageProficiency(StrEnum):
 
 class ProficiencyFramework(StrEnum):
     CEFR = "cefr"
+
+
+class AccountStatus(StrEnum):
+    PENDING_VERIFICATION = "pending_verification"
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+    DISABLED = "disabled"
+
+
+class ActionTokenPurpose(StrEnum):
+    EMAIL_VERIFICATION = "email_verification"
+    PASSWORD_RESET = "password_reset"
+    EMAIL_CHANGE = "email_change"
+
+
+class EmailOutboxStatus(StrEnum):
+    PENDING = "pending"
+    SENDING = "sending"
+    SENT = "sent"
+    FAILED = "failed"
     ACTFL = "actfl"
     OTHER = "other"
 

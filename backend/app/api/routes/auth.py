@@ -16,7 +16,16 @@ from app.auth.dependencies import (
 from app.core.config import Settings, get_settings
 from app.models.auth_session import AuthSession
 from app.models.user import User
-from app.schemas.auth import CSRFResponse, LoginRequest, LoginResponse, UserPublicResponse
+from app.schemas.auth import (
+    CSRFResponse,
+    GenericMessageResponse,
+    LoginRequest,
+    LoginResponse,
+    RegisterRequest,
+    ResendVerificationRequest,
+    UserPublicResponse,
+    VerifyEmailRequest,
+)
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
@@ -86,8 +95,76 @@ def login(
     settings = get_settings()
     _set_session_cookie(response, raw_session_token, settings)
     return LoginResponse(
-        user=UserPublicResponse(id=user.id, email=user.email, is_active=user.is_active),
+        user=UserPublicResponse(
+            id=user.id,
+            email=user.email,
+            is_active=user.is_active,
+            status=user.status,
+            email_verified_at=user.email_verified_at,
+        ),
         csrf_token=raw_csrf_token,
+    )
+
+
+@router.post(
+    "/register",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=GenericMessageResponse,
+    summary="Register a new account and send email verification",
+)
+def register(
+    payload: RegisterRequest,
+    request: Request,
+    auth_service: AuthServiceDep,
+) -> GenericMessageResponse:
+    validate_origin(request)
+    auth_service.register_public_user(
+        email=payload.email,
+        password=payload.password,
+        client_ip=_client_ip(request),
+    )
+    return GenericMessageResponse(
+        detail="if registration is eligible, a verification email will be sent shortly"
+    )
+
+
+@router.post(
+    "/verify-email",
+    status_code=status.HTTP_200_OK,
+    response_model=GenericMessageResponse,
+    summary="Consume a verification token and activate the user account",
+)
+def verify_email(
+    payload: VerifyEmailRequest,
+    request: Request,
+    auth_service: AuthServiceDep,
+) -> GenericMessageResponse:
+    validate_origin(request)
+    auth_service.verify_email(
+        raw_token=payload.token,
+        client_ip=_client_ip(request),
+    )
+    return GenericMessageResponse(detail="email address verified")
+
+
+@router.post(
+    "/resend-verification",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=GenericMessageResponse,
+    summary="Request a new verification email for a pending account",
+)
+def resend_verification(
+    payload: ResendVerificationRequest,
+    request: Request,
+    auth_service: AuthServiceDep,
+) -> GenericMessageResponse:
+    validate_origin(request)
+    auth_service.resend_verification(
+        email=payload.email,
+        client_ip=_client_ip(request),
+    )
+    return GenericMessageResponse(
+        detail="if the account is pending verification, a verification email will be sent shortly"
     )
 
 
@@ -118,6 +195,8 @@ def read_me(current_user: ActiveUserDep) -> UserPublicResponse:
         id=current_user.id,
         email=current_user.email,
         is_active=current_user.is_active,
+        status=current_user.status,
+        email_verified_at=current_user.email_verified_at,
     )
 
 

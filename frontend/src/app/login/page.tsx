@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/components/auth/auth-provider";
@@ -99,6 +100,18 @@ export default function LoginPage() {
             {submitting ? "Signing in..." : "Sign in"}
           </Button>
         </form>
+
+        <div className="mt-4 flex flex-col gap-1.5 text-center text-xs text-muted-foreground">
+          <Link href="/register" className="underline hover:text-foreground">
+            Create an account
+          </Link>
+          <Link
+            href="/verification-sent"
+            className="underline hover:text-foreground"
+          >
+            Resend verification email
+          </Link>
+        </div>
       </section>
     </main>
   );

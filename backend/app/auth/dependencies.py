@@ -22,6 +22,7 @@ from app.core.config import Settings, get_settings
 from app.database.dependencies import get_db
 from app.models.auth_session import AuthSession
 from app.models.candidate_profile import CandidateProfile
+from app.models.enums import AccountStatus
 from app.models.user import User
 from app.profile.exceptions import ProfileNotFoundError
 
@@ -86,7 +87,7 @@ def get_current_user(
 def get_current_active_user(
     user: Annotated[User, Depends(get_current_user)],
 ) -> User:
-    if not user.is_active:
+    if user.status != AccountStatus.ACTIVE.value or not user.is_active:
         raise AuthenticationRequiredError("user account is inactive")
     return user
 

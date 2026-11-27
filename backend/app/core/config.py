@@ -44,9 +44,34 @@ class Settings(BaseSettings):
     auth_session_cookie_name: str = "vaganexo_session"
     auth_session_ttl_seconds: int = 60 * 60 * 24 * 7  # 7 days
     auth_cookie_secure: bool | None = None
+    auth_public_registration_enabled: bool = False
     auth_login_rate_limit_max_attempts: int = 5
+    auth_login_rate_limit_ip_max_attempts: int = 20
     auth_login_rate_limit_window_seconds: int = 300
+    auth_register_rate_limit_max_attempts: int = 5
+    auth_register_rate_limit_window_seconds: int = 3600
+    auth_resend_rate_limit_max_attempts: int = 3
+    auth_resend_rate_limit_window_seconds: int = 900
+    auth_general_rate_limit_max_attempts: int = 60
+    auth_general_rate_limit_window_seconds: int = 60
     auth_trusted_proxies: list[str] = []
+
+    # Account lifecycle tokens, transactional email, and outbox encryption
+    app_public_base_url: str = "http://127.0.0.1:3000"
+    email_verification_ttl_hours: int = 24
+    mail_provider: str = "fake"
+    mail_from_address: str = "no-reply@vaganexo.local"
+    mail_from_name: str = "VagaNexo"
+    mail_host: str = "127.0.0.1"
+    mail_port: int = 1025
+    mail_username: str = ""
+    mail_password: SecretStr = SecretStr("")
+    mail_use_tls: bool = False
+    mail_use_ssl: bool = False
+    mail_timeout: int = 10
+    email_outbox_encryption_keys: SecretStr = SecretStr("")
+    email_outbox_max_attempts: int = 5
+    email_outbox_lease_seconds: int = 60
 
     ai_provider: str = "openai-compatible"
     ai_base_url: str = "http://127.0.0.1:11434/v1"

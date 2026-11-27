@@ -49,6 +49,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Provision the user as inactive",
     )
+    create_user_parser.add_argument(
+        "--verify-email",
+        action="store_true",
+        help="Mark the provisioned user's email address as verified",
+    )
 
     claim_parser = subparsers.add_parser(
         "claim-profile",
@@ -80,6 +85,7 @@ def run_cli(
                 email=args.email,
                 password=password,
                 is_active=not args.inactive,
+                verify_email=args.verify_email,
             )
             print(f"Created user {user.id} ({user.email}) active={user.is_active}")
             return 0

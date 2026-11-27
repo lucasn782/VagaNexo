@@ -4,11 +4,13 @@ Importing this package registers every table on ``Base.metadata`` so that
 Alembic and the test fixtures see the complete schema.
 """
 
+from app.models.account_action_token import AccountActionToken
 from app.models.auth_session import AuthSession
 from app.models.base import Base
 from app.models.candidate_profile import CandidateProfile
 from app.models.certification import Certification
 from app.models.education import Education
+from app.models.email_outbox import EmailOutbox
 from app.models.experience import WorkExperience
 from app.models.language import Language
 from app.models.preference import JobPreferences
@@ -19,11 +21,13 @@ from app.models.skill import Skill
 from app.models.user import User
 
 __all__ = [
+    "AccountActionToken",
     "AuthSession",
     "Base",
     "CandidateProfile",
     "Certification",
     "Education",
+    "EmailOutbox",
     "JobPreferences",
     "Language",
     "Project",

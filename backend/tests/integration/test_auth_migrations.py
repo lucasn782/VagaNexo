@@ -15,11 +15,13 @@ MIGRATION_DB_NAME = "vaganexo_migration_test"
 
 def _migration_url() -> URL:
     base = _test_database_url()
-    assert base.database != "vaganexo"
+    assert base.database in {"vaganexo_test", MIGRATION_DB_NAME}
     return base.set(database=MIGRATION_DB_NAME)
 
 
 def _recreate_disposable_db(url: URL) -> None:
+    if url.database != MIGRATION_DB_NAME:
+        raise RuntimeError("refusing to recreate a database outside the migration test allowlist")
     admin_url = url.set(drivername="postgresql", database="postgres")
     with psycopg.connect(
         admin_url.render_as_string(hide_password=False),
@@ -35,6 +37,8 @@ def _recreate_disposable_db(url: URL) -> None:
 
 
 def _drop_disposable_db(url: URL) -> None:
+    if url.database != MIGRATION_DB_NAME:
+        raise RuntimeError("refusing to drop a database outside the migration test allowlist")
     admin_url = url.set(drivername="postgresql", database="postgres")
     with psycopg.connect(
         admin_url.render_as_string(hide_password=False),
@@ -54,14 +58,22 @@ def test_auth_migration_preserves_legacy_profiles_and_downgrades_cleanly() -> No
     alembic_ini = Path(__file__).resolve().parents[2] / "alembic.ini"
     config = Config(str(alembic_ini))
     engine = create_engine(url, pool_pre_ping=True)
+    with engine.connect() as connection:
+        actual_database = connection.execute(text("SELECT current_database()")).scalar_one()
+    if actual_database != MIGRATION_DB_NAME:
+        engine.dispose()
+        raise RuntimeError("refusing migration test because current_database() did not match")
 
     try:
-        # 1. Upgrade to pre-auth revision and insert a legacy unowned profile
+        # 1. Upgrade to the auth base and insert pre-lifecycle records.
         with engine.begin() as conn:
             config.attributes["connection"] = conn
-            command.upgrade(config, "c8d9e0f1a2b3")
+            command.upgrade(config, "d1e2f3a4b5c6")
 
         legacy_id = uuid.uuid4()
+        user_id = uuid.uuid4()
+        inactive_user_id = uuid.uuid4()
+        session_id = uuid.uuid4()
         with engine.begin() as conn:
             conn.execute(
                 text(
@@ -70,35 +82,13 @@ def test_auth_migration_preserves_legacy_profiles_and_downgrades_cleanly() -> No
                 ),
                 {"id": legacy_id},
             )
-
-        # 2. Upgrade to head (d1e2f3a4b5c6)
-        with engine.begin() as conn:
-            config.attributes["connection"] = conn
-            command.upgrade(config, "head")
-
-        tables = set(inspect(engine).get_table_names(schema="public"))
-        assert {"users", "auth_sessions", "candidate_profiles"}.issubset(tables)
-
-        # Legacy profile preserved with user_id = NULL
-        with engine.connect() as conn:
-            row = conn.execute(
-                text("SELECT full_name, user_id FROM candidate_profiles WHERE id = :id"),
-                {"id": legacy_id},
-            ).fetchone()
-            assert row is not None
-            assert row[0] == "Legacy Candidate"
-            assert row[1] is None
-
-        # 3. Create a user, claim the legacy profile, and create a session
-        user_id = uuid.uuid4()
-        session_id = uuid.uuid4()
-        with engine.begin() as conn:
             conn.execute(
                 text(
                     "INSERT INTO users (id, email, password_hash, is_active) "
-                    "VALUES (:id, 'owner@example.com', 'hash', true)"
+                    "VALUES (:id, 'owner@example.com', 'hash', true), "
+                    "(:inactive_id, 'disabled@example.com', 'hash', false)"
                 ),
-                {"id": user_id},
+                {"id": user_id, "inactive_id": inactive_user_id},
             )
             conn.execute(
                 text("UPDATE candidate_profiles SET user_id = :uid WHERE id = :pid"),
@@ -113,14 +103,53 @@ def test_auth_migration_preserves_legacy_profiles_and_downgrades_cleanly() -> No
                 {"sid": session_id, "uid": user_id, "th": "a" * 64, "ch": "b" * 64},
             )
 
-        # 4. Downgrade back to c8d9e0f1a2b3: users/auth_sessions removed, legacy profile preserved
+        # 2. Upgrade through account lifecycle and verify the legacy mapping.
         with engine.begin() as conn:
             config.attributes["connection"] = conn
-            command.downgrade(config, "c8d9e0f1a2b3")
+            command.upgrade(config, "head")
+
+        tables = set(inspect(engine).get_table_names(schema="public"))
+        assert {
+            "users",
+            "auth_sessions",
+            "candidate_profiles",
+            "account_action_tokens",
+            "email_outbox",
+        }.issubset(tables)
+
+        with engine.connect() as conn:
+            status_map = dict(conn.execute(text("SELECT email, status FROM users")).fetchall())
+            assert status_map == {
+                "owner@example.com": "active",
+                "disabled@example.com": "disabled",
+            }
+            assert (
+                conn.execute(
+                    text("SELECT count(*) FROM users WHERE email_verified_at IS NOT NULL")
+                ).scalar_one()
+                == 0
+            )
+
+        # Legacy profile preserved with user_id = NULL
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT full_name, user_id FROM candidate_profiles WHERE id = :id"),
+                {"id": legacy_id},
+            ).fetchone()
+            assert row is not None
+            assert row[0] == "Legacy Candidate"
+            assert row[1] == user_id
+
+        # 3. Downgrade only the new revision; legacy users, sessions and profiles remain.
+        with engine.begin() as conn:
+            config.attributes["connection"] = conn
+            command.downgrade(config, "d1e2f3a4b5c6")
 
         tables_after_down = set(inspect(engine).get_table_names(schema="public"))
-        assert "users" not in tables_after_down
-        assert "auth_sessions" not in tables_after_down
+        assert "users" in tables_after_down
+        assert "auth_sessions" in tables_after_down
+        assert "account_action_tokens" not in tables_after_down
+        assert "email_outbox" not in tables_after_down
         assert "candidate_profiles" in tables_after_down
 
         with engine.connect() as conn:
@@ -129,11 +158,38 @@ def test_auth_migration_preserves_legacy_profiles_and_downgrades_cleanly() -> No
                 {"id": legacy_id},
             ).scalar_one()
             assert preserved == "Legacy Candidate"
+            assert (
+                conn.execute(
+                    text("SELECT count(*) FROM auth_sessions WHERE id = :sid"),
+                    {"sid": session_id},
+                ).scalar_one()
+                == 1
+            )
+            assert (
+                conn.execute(
+                    text("SELECT count(*) FROM users WHERE id IN (:uid, :inactive_id)"),
+                    {"uid": user_id, "inactive_id": inactive_user_id},
+                ).scalar_one()
+                == 2
+            )
 
-        # 5. Re-upgrade to head
+        # 4. Re-upgrade maps the same legacy users while preserving existing data.
         with engine.begin() as conn:
             config.attributes["connection"] = conn
             command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            assert dict(conn.execute(text("SELECT email, status FROM users")).fetchall()) == {
+                "owner@example.com": "active",
+                "disabled@example.com": "disabled",
+            }
+
+        # 5. Downgrade the older auth revision and keep the legacy profile.
+        with engine.begin() as conn:
+            config.attributes["connection"] = conn
+            command.downgrade(config, "c8d9e0f1a2b3")
+        assert "users" not in set(inspect(engine).get_table_names(schema="public"))
+        assert "candidate_profiles" in set(inspect(engine).get_table_names(schema="public"))
     finally:
         engine.dispose()
         _drop_disposable_db(url)
