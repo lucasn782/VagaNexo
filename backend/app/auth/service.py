@@ -114,7 +114,12 @@ class AuthService:
         normalized = normalize_email(email)
         password_hash = hash_password(password)
 
-        existing = self.session.scalar(select(User).where(User.email == normalized))
+        existing = self.session.scalar(
+            select(User)
+            .where(User.email == normalized)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         if existing is not None:
             # Anti-enumeration: never disclose account existence or status.
             if existing.status == AccountStatus.PENDING_VERIFICATION.value:
@@ -158,7 +163,12 @@ class AuthService:
             raw_token=raw_token,
             purpose=ActionTokenPurpose.EMAIL_VERIFICATION,
         )
-        user = self.session.scalar(select(User).where(User.id == user_id))
+        user = self.session.scalar(
+            select(User)
+            .where(User.id == user_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         if user is None or user.status in {
             AccountStatus.SUSPENDED.value,
             AccountStatus.DISABLED.value,
@@ -201,7 +211,12 @@ class AuthService:
             window_seconds=self.settings.auth_resend_rate_limit_window_seconds,
         )
 
-        user = self.session.scalar(select(User).where(User.email == normalized))
+        user = self.session.scalar(
+            select(User)
+            .where(User.email == normalized)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         if user is None or user.status != AccountStatus.PENDING_VERIFICATION.value:
             # Anti-enumeration: uniform response, no unnecessary emails for verified/active users.
             return None
@@ -260,7 +275,12 @@ class AuthService:
             normalized_email=normalized,
         )
 
-        user = self.session.scalar(select(User).where(User.email == normalized))
+        user = self.session.scalar(
+            select(User)
+            .where(User.email == normalized)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         if user is None:
             self.rate_limiter.record_login_failure(
                 client_ip=client_ip,

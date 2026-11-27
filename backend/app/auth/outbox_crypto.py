@@ -14,9 +14,6 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from app.auth.exceptions import OutboxEncryptionError
 from app.core.config import Settings, get_settings
 
-# Deterministic key used ONLY outside production when EMAIL_OUTBOX_ENCRYPTION_KEYS
-# is left empty in local development/test environments.
-_DEV_FALLBACK_KEY = b"vaganexo-dev-outbox-key-32-bytes"
 _NONCE_BYTES = 12
 
 
@@ -36,12 +33,10 @@ def _decode_key(raw_b64: str) -> bytes:
     return decoded
 
 
-def _parse_keyring(raw_keys: str, *, allow_dev_fallback: bool) -> dict[int, bytes]:
+def _parse_keyring(raw_keys: str) -> dict[int, bytes]:
     cleaned = raw_keys.strip()
     if not cleaned:
-        if allow_dev_fallback:
-            return {1: _DEV_FALLBACK_KEY}
-        raise OutboxEncryptionError("EMAIL_OUTBOX_ENCRYPTION_KEYS must be configured in production")
+        raise OutboxEncryptionError("EMAIL_OUTBOX_ENCRYPTION_KEYS must be configured")
 
     keyring: dict[int, bytes] = {}
     for entry in cleaned.split(","):
@@ -79,10 +74,7 @@ class OutboxCrypto:
     @classmethod
     def from_settings(cls, settings: Settings | None = None) -> OutboxCrypto:
         current = settings or get_settings()
-        keyring = _parse_keyring(
-            current.email_outbox_encryption_keys.get_secret_value(),
-            allow_dev_fallback=current.app_env != "production",
-        )
+        keyring = _parse_keyring(current.email_outbox_encryption_keys.get_secret_value())
         return cls(keyring)
 
     @staticmethod

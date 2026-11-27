@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import smtplib
+import ssl
 import threading
 from dataclasses import dataclass
 from email.message import EmailMessage as StdEmailMessage
@@ -54,6 +55,8 @@ class SMTPEmailProvider:
         self.settings = settings
 
     def send(self, message: TransactionalEmail) -> None:
+        if self.settings.mail_use_tls and self.settings.mail_use_ssl:
+            raise EmailDeliveryError("SMTP TLS and SSL modes are mutually exclusive")
         if self.settings.app_env == "production" and not (
             self.settings.mail_use_tls or self.settings.mail_use_ssl
         ):
@@ -72,6 +75,7 @@ class SMTPEmailProvider:
                     self.settings.mail_host,
                     self.settings.mail_port,
                     timeout=self.settings.mail_timeout,
+                    context=ssl.create_default_context(),
                 ) as client:
                     self._authenticate_and_send(client, mime)
             else:
@@ -81,7 +85,7 @@ class SMTPEmailProvider:
                     timeout=self.settings.mail_timeout,
                 ) as client:
                     if self.settings.mail_use_tls:
-                        client.starttls()
+                        client.starttls(context=ssl.create_default_context())
                     self._authenticate_and_send(client, mime)
         except smtplib.SMTPException as exc:
             raise EmailDeliveryError(f"SMTP error ({type(exc).__name__})") from exc

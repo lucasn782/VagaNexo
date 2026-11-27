@@ -53,6 +53,7 @@ class EmailOutbox(UUIDPrimaryKeyMixin, Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    claim_token: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
     lock_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,

@@ -6,15 +6,18 @@ import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
 from app.auth.email_provider import EmailDeliveryError, EmailProvider, render_verification_email
 from app.auth.exceptions import OutboxEncryptionError
 from app.auth.outbox_crypto import OutboxCrypto
+from app.auth.security import hash_token
 from app.core.config import Settings, get_settings
+from app.models.account_action_token import AccountActionToken
 from app.models.email_outbox import EmailOutbox
-from app.models.enums import EmailOutboxStatus
+from app.models.enums import AccountStatus, ActionTokenPurpose, EmailOutboxStatus
+from app.models.user import User
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +94,7 @@ class EmailOutboxService:
 
         entry.status = EmailOutboxStatus.SENDING.value
         entry.locked_at = now
+        entry.claim_token = uuid.uuid4()
         entry.lock_expires_at = now + timedelta(seconds=current.email_outbox_lease_seconds)
         entry.attempts += 1
         session.commit()
@@ -124,20 +128,39 @@ class EmailOutboxService:
         entry: EmailOutbox,
         error: str,
         max_attempts: int,
-    ) -> None:
+        claim_token: uuid.UUID,
+    ) -> bool:
         now = _utcnow()
-        entry.locked_at = None
-        entry.lock_expires_at = None
-        entry.last_error = error[:500]
+        values: dict[str, object] = {
+            "locked_at": None,
+            "lock_expires_at": None,
+            "claim_token": None,
+            "last_error": error[:500],
+        }
         if entry.attempts >= max_attempts:
-            entry.status = EmailOutboxStatus.FAILED.value
-            entry.encrypted_payload = None
-            entry.payload_key_version = None
+            values.update(
+                status=EmailOutboxStatus.FAILED.value,
+                encrypted_payload=None,
+                payload_key_version=None,
+            )
         else:
             backoff_seconds = min(300, 10 * (2 ** max(0, entry.attempts - 1)))
-            entry.status = EmailOutboxStatus.PENDING.value
-            entry.available_at = now + timedelta(seconds=backoff_seconds)
+            values.update(
+                status=EmailOutboxStatus.PENDING.value,
+                available_at=now + timedelta(seconds=backoff_seconds),
+            )
+        result = session.execute(
+            update(EmailOutbox)
+            .where(
+                EmailOutbox.id == entry.id,
+                EmailOutbox.status == EmailOutboxStatus.SENDING.value,
+                EmailOutbox.claim_token == claim_token,
+            )
+            .values(**values)
+            .returning(EmailOutbox.id)
+        )
         session.commit()
+        return result.scalar_one_or_none() is not None
 
     @classmethod
     def sweep_pending(
@@ -172,12 +195,16 @@ class EmailOutboxService:
         provider: EmailProvider,
         settings: Settings,
     ) -> bool:
+        claim_token = entry.claim_token
+        if claim_token is None:
+            return False
         if not entry.encrypted_payload or entry.payload_key_version is None:
             cls._mark_failed(
                 session,
                 entry=entry,
                 error="missing encrypted payload",
                 max_attempts=settings.email_outbox_max_attempts,
+                claim_token=claim_token,
             )
             return False
 
@@ -193,6 +220,53 @@ class EmailOutboxService:
             if not raw_token:
                 raise OutboxEncryptionError("missing token in decrypted outbox payload")
 
+            # Hold the account row lock through delivery. Issuance and token
+            # consumption use the same User -> ActionToken lock order, so a
+            # revoked, consumed, expired, or no-longer-pending message cannot
+            # be sent after its purpose has ended.
+            user = session.scalar(
+                select(User)
+                .where(User.id == entry.user_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            token_is_current = False
+            if user is not None and user.status == AccountStatus.PENDING_VERIFICATION.value:
+                token_is_current = (
+                    session.scalar(
+                        select(AccountActionToken.id).where(
+                            AccountActionToken.user_id == user.id,
+                            AccountActionToken.purpose
+                            == ActionTokenPurpose.EMAIL_VERIFICATION.value,
+                            AccountActionToken.token_hash == hash_token(raw_token),
+                            AccountActionToken.consumed_at.is_(None),
+                            AccountActionToken.revoked_at.is_(None),
+                            AccountActionToken.expires_at > _utcnow(),
+                        )
+                    )
+                    is not None
+                )
+            if not token_is_current:
+                result = session.execute(
+                    update(EmailOutbox)
+                    .where(
+                        EmailOutbox.id == entry.id,
+                        EmailOutbox.status == EmailOutboxStatus.SENDING.value,
+                        EmailOutbox.claim_token == claim_token,
+                    )
+                    .values(
+                        status=EmailOutboxStatus.FAILED.value,
+                        locked_at=None,
+                        lock_expires_at=None,
+                        claim_token=None,
+                        last_error="verification message is no longer eligible",
+                        encrypted_payload=None,
+                        payload_key_version=None,
+                    )
+                )
+                session.commit()
+                return False
+
             message = render_verification_email(
                 recipient_email=entry.recipient_email,
                 raw_token=raw_token,
@@ -206,6 +280,7 @@ class EmailOutboxService:
                 entry=entry,
                 error=str(exc),
                 max_attempts=settings.email_outbox_max_attempts,
+                claim_token=claim_token,
             )
             logger.warning(
                 "Email outbox delivery failed for message %s (attempt %s/%s): %s",
@@ -217,13 +292,28 @@ class EmailOutboxService:
             return False
 
         now = _utcnow()
-        entry.status = EmailOutboxStatus.SENT.value
-        entry.sent_at = now
-        entry.locked_at = None
-        entry.lock_expires_at = None
-        entry.last_error = None
-        entry.encrypted_payload = None
-        entry.payload_key_version = None
+        result = session.execute(
+            update(EmailOutbox)
+            .where(
+                EmailOutbox.id == entry.id,
+                EmailOutbox.status == EmailOutboxStatus.SENDING.value,
+                EmailOutbox.claim_token == claim_token,
+            )
+            .values(
+                status=EmailOutboxStatus.SENT.value,
+                sent_at=now,
+                locked_at=None,
+                lock_expires_at=None,
+                claim_token=None,
+                last_error=None,
+                encrypted_payload=None,
+                payload_key_version=None,
+            )
+            .returning(EmailOutbox.id)
+        )
         session.commit()
+        if result.scalar_one_or_none() is None:
+            logger.info("Email outbox message %s was finalized by a newer lease", entry.id)
+            return False
         logger.info("Email outbox message %s delivered", entry.id)
         return True

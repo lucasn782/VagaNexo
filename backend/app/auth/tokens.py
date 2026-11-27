@@ -6,13 +6,14 @@ import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.auth.exceptions import InvalidActionTokenError
 from app.auth.security import hash_token
 from app.models.account_action_token import AccountActionToken
 from app.models.enums import ActionTokenPurpose
+from app.models.user import User
 
 
 def _utcnow() -> datetime:
@@ -30,6 +31,11 @@ class ActionTokenService:
         purpose: ActionTokenPurpose,
         ttl: timedelta,
     ) -> tuple[AccountActionToken, str]:
+        # Serialize all token issuance for an account. Verification acquires
+        # locks in the same User -> ActionToken order to avoid deadlocks.
+        user_exists = session.scalar(select(User.id).where(User.id == user_id).with_for_update())
+        if user_exists is None:
+            raise InvalidActionTokenError()
         now = _utcnow()
         # Revoke any prior active tokens for the same user and purpose.
         session.execute(
@@ -66,6 +72,19 @@ class ActionTokenService:
 
         now = _utcnow()
         token_digest = hash_token(raw_token)
+        owner_id = session.scalar(
+            select(AccountActionToken.user_id).where(
+                AccountActionToken.token_hash == token_digest,
+                AccountActionToken.purpose == purpose.value,
+            )
+        )
+        if owner_id is None:
+            raise InvalidActionTokenError()
+        # Match issue_token's lock order. The conditional UPDATE below remains
+        # the single-use atomic consume operation after account-level locking.
+        owner_exists = session.scalar(select(User.id).where(User.id == owner_id).with_for_update())
+        if owner_exists is None:
+            raise InvalidActionTokenError()
         row = session.execute(
             update(AccountActionToken)
             .where(
